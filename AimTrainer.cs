@@ -151,7 +151,7 @@ class Trainer : Form
     const uint RID_INPUT = 0x10000003;
 
     const string TRK = "Tracking", FLK = "Flick", BOT = "Bots", RCT = "Reaction", FND = "Sens finder";
-    const string AppVersion = "1.2.0";
+    const string AppVersion = "1.2.1";
     const string Repo = "THATLMG/aim-trainer";
     static readonly string[] DiffNames = { "Easy", "Medium", "Hard", "Insane" };
     static readonly double[] BallR = { 0.045, 0.033, 0.024, 0.017 };
@@ -232,7 +232,7 @@ class Trainer : Form
     volatile List<LyricLine> lyrics;
     volatile string lyricsState = "", lyricsKey = "";
     volatile bool lyricsSynced, musicDead;
-    bool musicOn = true, lyricsInRound = false, lyricsOpen = false;
+    bool musicOn = true, lyricsInRound = true, lyricsOpen = false;
     int musicCmd;
     System.Windows.Forms.Timer musicTimer = new System.Windows.Forms.Timer { Interval = 250 };
 
@@ -602,7 +602,8 @@ class Trainer : Form
                 var p = line.Split('\t');
                 if (p[0] == "P" && p.Length >= 3) { playerName = CleanName(p[1]); globalDpi = double.Parse(p[2], ci); }
                 if (p[0] == "N" && p.Length >= 2) seenNews = p[1];
-                if (p[0] == "M" && p.Length >= 3) { musicOn = p[1] == "1"; lyricsInRound = p[2] == "1"; }
+                if (p[0] == "M" && p.Length >= 2) musicOn = p[1] == "1";
+                if (p[0] == "M2" && p.Length >= 2) lyricsInRound = p[1] == "1";
                 if (p[0] == "S" && p.Length >= 4) settings[p[1]] = new[] { double.Parse(p[2], ci), double.Parse(p[3], ci) };
                 if (p[0] == "R" && p.Length >= 6)
                     recs.Add(new Rec { Game = p[1], Mode = p[2], Diff = int.Parse(p[3], ci), Score = double.Parse(p[4], ci), When = DateTime.Parse(p[5], ci) });
@@ -619,7 +620,8 @@ class Trainer : Form
             var lines = new List<string>();
             if (playerName != "") lines.Add(string.Format(ci, "P\t{0}\t{1}", playerName, globalDpi));
             if (seenNews != "") lines.Add("N\t" + seenNews.Replace("\t", " "));
-            lines.Add("M\t" + (musicOn ? "1" : "0") + "\t" + (lyricsInRound ? "1" : "0"));
+            lines.Add("M\t" + (musicOn ? "1" : "0"));
+            lines.Add("M2\t" + (lyricsInRound ? "1" : "0"));
             foreach (var kv in settings) lines.Add(string.Format(ci, "S\t{0}\t{1}\t{2}", kv.Key, kv.Value[0], kv.Value[1]));
             foreach (var r in recs) lines.Add(string.Format(ci, "R\t{0}\t{1}\t{2}\t{3}\t{4:yyyy-MM-dd HH:mm}", r.Game, r.Mode, r.Diff, r.Score, r.When));
             Directory.CreateDirectory(Path.GetDirectoryName(dataPath));
@@ -1630,18 +1632,43 @@ class Trainer : Form
     {
         var n = np;
         if (n == null) return;
-        float W = ClientSize.Width, H = ClientSize.Height, m = P(28);
-        Color soft = playMode == RCT ? Color.FromArgb(190, 255, 255, 255) : Muted;
-        string line = (n.Playing ? "Now playing: " : "Paused: ") + (n.Artist != "" ? n.Artist + " – " : "") + n.Title;
+        float W = ClientSize.Width, m = P(28);
+        bool rct = playMode == RCT;
+        Color main = rct ? Color.White : TextC, sub = rct ? Color.FromArgb(210, 255, 255, 255) : Muted;
+
+        // Song card in the top-left corner: art, title, artist and time, thin progress bar.
+        var art = new RectangleF(m, m, P(44), P(44));
+        var img = songArt;
+        if (img != null) { try { g.DrawImage(img, art); } catch { } }
+        else FillRound(g, Color.FromArgb(120, PanelHi), art, P(6));
+        float tx0 = art.Right + P(10), tw = Math.Min(P(320), W / 3);
         using (var sf = new StringFormat(StringFormatFlags.NoWrap) { Trimming = StringTrimming.EllipsisCharacter })
-        using (var b = new SolidBrush(soft))
-            g.DrawString(line, fSmall, b, new RectangleF(m, H - m - P(20), W / 2 - m - P(80), P(20)), sf);
-        if (!lyricsInRound || playMode == RCT) return;
+        using (var b1 = new SolidBrush(main)) using (var b2 = new SolidBrush(sub))
+        {
+            g.DrawString(n.Title != "" ? n.Title : "Unknown song", fH3, b1, new RectangleF(tx0, art.Y - P(2), tw, P(22)), sf);
+            g.DrawString((n.Playing ? "" : "Paused  ·  ") + (n.Artist != "" ? n.Artist + "  ·  " : "") + Clock(n.Current) + (n.Dur > 0 ? " / " + Clock(n.Dur) : ""),
+                fSmall, b2, new RectangleF(tx0, art.Y + P(20), tw, P(18)), sf);
+        }
+        var bar = new RectangleF(tx0, art.Bottom - P(3), tw, P(3));
+        FillRound(g, Color.FromArgb(90, 128, 128, 128), bar, P(1.5f));
+        if (n.Dur > 0) FillRound(g, rct ? Color.White : Accent, new RectangleF(bar.X, bar.Y, bar.Width * (float)(n.Current / n.Dur), bar.Height), P(1.5f));
+
+        // Current lyric right under it, in a rounded see-through gray bubble that only wraps the text.
+        if (!lyricsInRound) return;
         var ls = lyrics;
         if (lyricsState != "ok" || ls == null || lyricsKey != n.Key) return;
         int idx = LyricIndex(n, ls);
-        if (idx >= 0 && ls[idx].Text != "")
-            DrawTC(g, ls[idx].Text, fBody, Color.FromArgb(170, TextC), new RectangleF(0, m + P(52), W, P(28)));
+        if (idx < 0 || ls[idx].Text == "") return;
+        string text = ls[idx].Text;
+        SizeF size = g.MeasureString(text, fBody);
+        float padX = P(16), padY = P(7);
+        float bw = Math.Min(size.Width + padX * 2, W * 0.45f), bh = size.Height + padY * 2;
+        var bubble = new RectangleF(m, art.Bottom + P(12), bw, bh);
+        FillRound(g, Color.FromArgb(77, 128, 128, 128), bubble, bh / 2);            // gray at 30% opacity
+        DrawRound(g, Color.FromArgb(80, 255, 255, 255), bubble, bh / 2, Math.Max(1, P(1)));
+        using (var sf = new StringFormat(StringFormatFlags.NoWrap) { Trimming = StringTrimming.EllipsisCharacter, LineAlignment = StringAlignment.Center, Alignment = StringAlignment.Center })
+        using (var b = new SolidBrush(Color.White))
+            g.DrawString(text, fBody, b, new RectangleF(bubble.X + P(4), bubble.Y, bubble.Width - P(8), bubble.Height), sf);
     }
 
     void PaintSetup(Graphics g)
@@ -1885,7 +1912,7 @@ class Trainer : Form
         string left = playMode == FND
             ? game.Name.ToUpper() + "  ·  SENS FINDER  ·  ROUND " + Math.Min(fIdx + 1, 5) + " OF 5"
             : game.Name.ToUpper() + "  ·  " + playMode.ToUpper() + "  ·  " + DiffNames[playDiff].ToUpper();
-        DrawT(g, left, fLabel, Muted, m, m);
+        DrawT(g, left, fLabel, Muted, m, H - m - P(16));
         var bar = new RectangleF(W / 2 - P(200), m + P(4), P(400), P(6));
         FillRound(g, Blend(game.Bg, Color.White, 0.1f), bar, P(3));
         FillRound(g, game.Accent, new RectangleF(bar.X, bar.Y, bar.Width * (float)Math.Max(0, timeLeft / roundLen), bar.Height), P(3));
