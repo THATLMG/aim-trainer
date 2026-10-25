@@ -43,6 +43,94 @@ class Rec { public string Game, Mode; public int Diff; public double Score; publ
 
 class Btn { public RectangleF R; public Action Click; }
 
+// What Windows says is playing right now (Spotify, a browser tab, etc.).
+class NowPlaying
+{
+    public string Title = "", Artist = "", Album = "", App = "", Key = "";
+    public double Pos, Dur;
+    public DateTime PosAt;   // UTC moment Pos was measured
+    public bool Playing, CanPrev, CanNext;
+    public double Current
+    {
+        get
+        {
+            double c = Playing ? Pos + (DateTime.UtcNow - PosAt).TotalSeconds : Pos;
+            return Dur > 0 ? Math.Max(0, Math.Min(Dur, c)) : Math.Max(0, c);
+        }
+    }
+}
+
+class LyricLine { public double T; public string Text; }
+
+// Windows media controls. Kept in its own class so a PC without them only loses the music bar.
+namespace MediaBridge
+{
+    using Windows.Foundation;
+    using Windows.Media.Control;
+    using Windows.Storage.Streams;
+
+    static class Media
+    {
+        static GlobalSystemMediaTransportControlsSessionManager mgr;
+
+        static T Wait<T>(IAsyncOperation<T> op)
+        {
+            var start = DateTime.UtcNow;
+            while (op.Status == AsyncStatus.Started)
+            {
+                if ((DateTime.UtcNow - start).TotalSeconds > 3) throw new TimeoutException();
+                System.Threading.Thread.Sleep(5);
+            }
+            if (op.Status != AsyncStatus.Completed) throw new InvalidOperationException("media call failed");
+            return op.GetResults();
+        }
+
+        public static NowPlaying Poll(string lastKey, out byte[] art)
+        {
+            art = null;
+            if (mgr == null) mgr = Wait(GlobalSystemMediaTransportControlsSessionManager.RequestAsync());
+            var s = mgr.GetCurrentSession();
+            if (s == null) return null;
+            var p = Wait(s.TryGetMediaPropertiesAsync());
+            var tl = s.GetTimelineProperties();
+            var pi = s.GetPlaybackInfo();
+            var n = new NowPlaying { Title = p.Title ?? "", Artist = p.Artist ?? "", Album = p.AlbumTitle ?? "", App = s.SourceAppUserModelId ?? "" };
+            n.Key = n.Artist + "\n" + n.Title;
+            n.Dur = (tl.EndTime - tl.StartTime).TotalSeconds;
+            n.Pos = (tl.Position - tl.StartTime).TotalSeconds;
+            n.Playing = pi.PlaybackStatus == GlobalSystemMediaTransportControlsSessionPlaybackStatus.Playing;
+            DateTime at = tl.LastUpdatedTime.UtcDateTime;
+            n.PosAt = n.Playing && at > DateTime.UtcNow.AddDays(-1) && at <= DateTime.UtcNow.AddSeconds(5) ? at : DateTime.UtcNow;
+            n.CanNext = pi.Controls.IsNextEnabled;
+            n.CanPrev = pi.Controls.IsPreviousEnabled;
+            if (n.Key != lastKey && p.Thumbnail != null)
+            {
+                try
+                {
+                    var stream = Wait(p.Thumbnail.OpenReadAsync());
+                    var reader = new DataReader(stream);
+                    uint size = (uint)stream.Size;
+                    Wait(reader.LoadAsync(size));
+                    art = new byte[size];
+                    reader.ReadBytes(art);
+                }
+                catch { art = null; }
+            }
+            return n;
+        }
+
+        // 1 = play/pause, 2 = next, 3 = previous
+        public static void Command(int c)
+        {
+            var s = mgr == null ? null : mgr.GetCurrentSession();
+            if (s == null) return;
+            if (c == 1) Wait(s.TryTogglePlayPauseAsync());
+            else if (c == 2) Wait(s.TrySkipNextAsync());
+            else if (c == 3) Wait(s.TrySkipPreviousAsync());
+        }
+    }
+}
+
 // A capsule-shaped practice bot. U is its body width; Ground is where its feet stand.
 class Bot
 {
@@ -63,7 +151,7 @@ class Trainer : Form
     const uint RID_INPUT = 0x10000003;
 
     const string TRK = "Tracking", FLK = "Flick", BOT = "Bots", RCT = "Reaction", FND = "Sens finder";
-    const string AppVersion = "1.1.0";
+    const string AppVersion = "1.2.0";
     const string Repo = "THATLMG/aim-trainer";
     static readonly string[] DiffNames = { "Easy", "Medium", "Hard", "Insane" };
     static readonly double[] BallR = { 0.045, 0.033, 0.024, 0.017 };
@@ -137,6 +225,16 @@ class Trainer : Form
     List<double[]> path = new List<double[]>();   // crosshair x, y, speed since the last kill, for the coach
     double pathStartX, pathStartY;
     bool pathFresh;
+
+    // music player and lyrics (filled in by background threads)
+    volatile NowPlaying np;
+    volatile Image songArt;
+    volatile List<LyricLine> lyrics;
+    volatile string lyricsState = "", lyricsKey = "";
+    volatile bool lyricsSynced, musicDead;
+    bool musicOn = true, lyricsInRound = false, lyricsOpen = false;
+    int musicCmd;
+    System.Windows.Forms.Timer musicTimer = new System.Windows.Forms.Timer { Interval = 250 };
 
     // updates and news
     string updVersion = "", updNotes = "", updUrl = "", updState = "";
@@ -222,6 +320,165 @@ class Trainer : Form
         useRaw = RegisterRawInputDevices(dev, 1, (uint)Marshal.SizeOf(typeof(RAWINPUTDEVICE)));
         var t = new Thread(CheckOnline) { IsBackground = true };
         t.Start();
+        var mt = new Thread(MusicLoop) { IsBackground = true };
+        mt.Start();
+        musicTimer.Tick += delegate { if (scr != Scr.Play && scr != Scr.Setup && MusicVisible) Invalidate(); };
+        musicTimer.Start();
+    }
+
+    // ---------- music ----------
+    bool MusicVisible { get { return musicOn && !musicDead; } }
+
+    void MusicLoop()
+    {
+        string lastKey = null;
+        int fails = 0;
+        bool everWorked = false;
+        while (true)
+        {
+            int cmd = Interlocked.Exchange(ref musicCmd, 0);
+            if (!musicOn) { np = null; lastKey = null; Thread.Sleep(800); continue; }
+            try
+            {
+                if (cmd != 0) MediaBridge.Media.Command(cmd);
+                byte[] art;
+                var n = MediaBridge.Media.Poll(lastKey, out art);
+                everWorked = true; fails = 0;
+                if (n != null && n.Key != lastKey)
+                {
+                    lastKey = n.Key;
+                    songArt = art != null ? LoadArt(art) : null;
+                    if (n.Title != "") StartLyrics(n);
+                }
+                if (n == null) lastKey = null;
+                np = n;
+            }
+            catch (Exception e)
+            {
+                // Missing Windows media support shows up as a load error: hide the music bar for good.
+                if (e is TypeLoadException || e is FileNotFoundException || e is MissingMethodException || (!everWorked && ++fails > 5))
+                {
+                    musicDead = true; np = null;
+                    return;
+                }
+            }
+            Thread.Sleep(cmd != 0 ? 150 : 500);
+        }
+    }
+
+    static Image LoadArt(byte[] bytes)
+    {
+        try { using (var ms = new MemoryStream(bytes)) using (var img = Image.FromStream(ms)) return new Bitmap(img); }
+        catch { return null; }
+    }
+
+    void SendMusic(int cmd) { Interlocked.Exchange(ref musicCmd, cmd); }
+
+    void StartLyrics(NowPlaying n)
+    {
+        lyricsKey = n.Key;
+        lyrics = null;
+        lyricsState = "loading";
+        var t = new Thread(delegate()
+        {
+            FetchLyrics(n);
+            // The lyrics site is sometimes busy: try once more before giving up.
+            if (lyricsState == "error" && lyricsKey == n.Key) { Thread.Sleep(2500); FetchLyrics(n); }
+        }) { IsBackground = true };
+        t.Start();
+    }
+
+    static readonly System.Text.RegularExpressions.Regex Junk = new System.Text.RegularExpressions.Regex(
+        @"\s*[\(\[][^\)\]]*(official|lyric|audio|video|visuali[sz]er|hd|4k|mv|remaster)[^\)\]]*[\)\]]", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+    static readonly System.Text.RegularExpressions.Regex LrcLine = new System.Text.RegularExpressions.Regex(@"^\[(\d+):(\d+(?:\.\d+)?)\]\s?(.*)$");
+
+    void FetchLyrics(NowPlaying n)
+    {
+        string artist = n.Artist, title = Junk.Replace(n.Title, "").Trim();
+        string app = n.App.ToLowerInvariant();
+        bool browser = app.Contains("chrome") || app.Contains("msedge") || app.Contains("firefox") || app.Contains("opera") || app.Contains("brave");
+        // YouTube titles are usually "Artist - Song" with the channel as the artist.
+        if (browser && title.Contains(" - ")) { int i = title.IndexOf(" - "); artist = title.Substring(0, i).Trim(); title = title.Substring(i + 3).Trim(); }
+        artist = artist.Replace(" - Topic", "").Trim();
+
+        string state = "none", synced = null, plain = null;
+        try
+        {
+            var js = new JavaScriptSerializer();
+            using (var wc = Web())
+            {
+                Dictionary<string, object> hit = null;
+                if (n.Album != "" && n.Dur > 0)
+                {
+                    try
+                    {
+                        hit = js.DeserializeObject(wc.DownloadString("https://lrclib.net/api/get?artist_name=" + Uri.EscapeDataString(artist)
+                            + "&track_name=" + Uri.EscapeDataString(title) + "&album_name=" + Uri.EscapeDataString(n.Album)
+                            + "&duration=" + (int)Math.Round(n.Dur))) as Dictionary<string, object>;
+                    }
+                    catch (WebException) { }   // 404 = not found under that exact album
+                }
+                if (hit == null || (Str(hit, "syncedLyrics") == null && Str(hit, "plainLyrics") == null && !Bool(hit, "instrumental")))
+                {
+                    var list = js.DeserializeObject(wc.DownloadString("https://lrclib.net/api/search?track_name=" + Uri.EscapeDataString(title)
+                        + (artist != "" ? "&artist_name=" + Uri.EscapeDataString(artist) : ""))) as object[];
+                    hit = null;
+                    if (list != null)
+                    {
+                        var hits = list.OfType<Dictionary<string, object>>().ToList();
+                        Func<Dictionary<string, object>, bool> closeLength = h => n.Dur <= 0 || !h.ContainsKey("duration") || h["duration"] == null || Math.Abs(Convert.ToDouble(h["duration"]) - n.Dur) < 4;
+                        hit = hits.FirstOrDefault(h => Str(h, "syncedLyrics") != null && closeLength(h))
+                            ?? hits.FirstOrDefault(h => Str(h, "syncedLyrics") != null)
+                            ?? hits.FirstOrDefault(h => Str(h, "plainLyrics") != null);
+                    }
+                }
+                if (hit != null)
+                {
+                    synced = Str(hit, "syncedLyrics"); plain = Str(hit, "plainLyrics");
+                    if (Bool(hit, "instrumental")) state = "instrumental";
+                }
+            }
+        }
+        catch { state = "error"; }
+
+        var lines = new List<LyricLine>();
+        bool isSynced = false;
+        if (synced != null)
+        {
+            foreach (var raw in synced.Split('\n'))
+            {
+                var mm = LrcLine.Match(raw.Trim());
+                if (mm.Success)
+                    lines.Add(new LyricLine { T = int.Parse(mm.Groups[1].Value) * 60 + double.Parse(mm.Groups[2].Value, CultureInfo.InvariantCulture), Text = mm.Groups[3].Value.Trim() });
+            }
+            isSynced = lines.Count > 0;
+        }
+        if (!isSynced && plain != null)
+            foreach (var raw in plain.Split('\n')) if (raw.Trim() != "") lines.Add(new LyricLine { Text = raw.Trim() });
+        if (lines.Count > 0) state = "ok";
+
+        if (lyricsKey != n.Key) return;   // the song changed while we were looking
+        lyricsSynced = isSynced;
+        lyrics = lines;
+        lyricsState = state;
+    }
+
+    static string Str(Dictionary<string, object> d, string k)
+    {
+        object v;
+        return d.TryGetValue(k, out v) && v is string && ((string)v).Trim() != "" ? (string)v : null;
+    }
+    static bool Bool(Dictionary<string, object> d, string k) { object v; return d.TryGetValue(k, out v) && v is bool && (bool)v; }
+
+    // Index of the lyric line to highlight right now.
+    int LyricIndex(NowPlaying n, List<LyricLine> ls)
+    {
+        if (ls == null || ls.Count == 0 || n == null) return -1;
+        double cur = n.Current;
+        if (!lyricsSynced) return n.Dur > 0 ? Math.Min(ls.Count - 1, (int)(cur / n.Dur * ls.Count)) : 0;
+        int idx = -1;
+        for (int i = 0; i < ls.Count; i++) if (ls[i].T <= cur + 0.2) idx = i; else break;
+        return idx;
     }
 
     // ---------- updates and news (from the public GitHub repo) ----------
@@ -345,6 +602,7 @@ class Trainer : Form
                 var p = line.Split('\t');
                 if (p[0] == "P" && p.Length >= 3) { playerName = CleanName(p[1]); globalDpi = double.Parse(p[2], ci); }
                 if (p[0] == "N" && p.Length >= 2) seenNews = p[1];
+                if (p[0] == "M" && p.Length >= 3) { musicOn = p[1] == "1"; lyricsInRound = p[2] == "1"; }
                 if (p[0] == "S" && p.Length >= 4) settings[p[1]] = new[] { double.Parse(p[2], ci), double.Parse(p[3], ci) };
                 if (p[0] == "R" && p.Length >= 6)
                     recs.Add(new Rec { Game = p[1], Mode = p[2], Diff = int.Parse(p[3], ci), Score = double.Parse(p[4], ci), When = DateTime.Parse(p[5], ci) });
@@ -361,6 +619,7 @@ class Trainer : Form
             var lines = new List<string>();
             if (playerName != "") lines.Add(string.Format(ci, "P\t{0}\t{1}", playerName, globalDpi));
             if (seenNews != "") lines.Add("N\t" + seenNews.Replace("\t", " "));
+            lines.Add("M\t" + (musicOn ? "1" : "0") + "\t" + (lyricsInRound ? "1" : "0"));
             foreach (var kv in settings) lines.Add(string.Format(ci, "S\t{0}\t{1}\t{2}", kv.Key, kv.Value[0], kv.Value[1]));
             foreach (var r in recs) lines.Add(string.Format(ci, "R\t{0}\t{1}\t{2}\t{3}\t{4:yyyy-MM-dd HH:mm}", r.Game, r.Mode, r.Diff, r.Score, r.When));
             Directory.CreateDirectory(Path.GetDirectoryName(dataPath));
@@ -1261,6 +1520,128 @@ class Trainer : Form
         else if (scr == Scr.Game) PaintGame(g);
         else if (scr == Scr.Play) PaintPlay(g);
         else PaintResults(g);
+        if (MusicVisible && scr == Scr.Play) PaintMusicInRound(g);
+        else if (MusicVisible && scr != Scr.Setup) PaintMusicBar(g);
+    }
+
+    static string Clock(double s) { int t = (int)Math.Max(0, s); return t / 60 + ":" + (t % 60).ToString("00"); }
+
+    void PaintMusicBar(Graphics g)
+    {
+        float W = ClientSize.Width, H = ClientSize.Height, m = scr == Scr.Home ? P(48) : P(40);
+        float w = Math.Min(P(560), W - 2 * m), h = P(76);
+        var r = new RectangleF(W - m - w, H - m - h - (scr == Scr.Home ? P(26) : 0), w, h);
+        AddHit(r, () => { });
+        FillRound(g, Panel, r, P(12));
+        DrawRound(g, Line, r, P(12), 1);
+        var n = np;
+        if (n == null)
+        {
+            DrawT(g, "MUSIC", fLabel, Accent, r.X + P(18), r.Y + P(16));
+            DrawTW(g, "Nothing playing. Start Spotify, YouTube or any music app and it shows up here.", fSmall, Muted, new RectangleF(r.X + P(18), r.Y + P(36), r.Width - P(36), P(36)));
+            return;
+        }
+        var art = new RectangleF(r.X + P(10), r.Y + P(10), P(56), P(56));
+        var img = songArt;
+        if (img != null) { try { g.DrawImage(img, art); } catch { } }
+        else { FillRound(g, PanelHi, art, P(6)); DrawTC(g, "MUSIC", fLabel, Muted, art); }
+
+        float tx0 = art.Right + P(12), tw = r.Right - tx0 - P(222);
+        using (var sf = new StringFormat(StringFormatFlags.NoWrap) { Trimming = StringTrimming.EllipsisCharacter })
+        using (var b1 = new SolidBrush(TextC)) using (var b2 = new SolidBrush(Muted))
+        {
+            g.DrawString(n.Title != "" ? n.Title : "Unknown song", fH3, b1, new RectangleF(tx0, r.Y + P(10), tw, P(24)), sf);
+            g.DrawString((n.Artist != "" ? n.Artist + "  ·  " : "") + Clock(n.Current) + (n.Dur > 0 ? " / " + Clock(n.Dur) : ""), fSmall, b2, new RectangleF(tx0, r.Y + P(34), tw, P(20)), sf);
+        }
+        var bar = new RectangleF(tx0, r.Y + P(60), tw, P(4));
+        FillRound(g, Line, bar, P(2));
+        if (n.Dur > 0) FillRound(g, Accent, new RectangleF(bar.X, bar.Y, bar.Width * (float)(n.Current / n.Dur), bar.Height), P(2));
+
+        float bx2 = r.Right - P(216), by3 = r.Y + P(19);
+        AddIconBtn(g, new RectangleF(bx2, by3, P(38), P(38)), "prev", () => SendMusic(3), n.CanPrev);
+        AddIconBtn(g, new RectangleF(bx2 + P(44), by3, P(38), P(38)), n.Playing ? "pause" : "play", () => SendMusic(1), true);
+        AddIconBtn(g, new RectangleF(bx2 + P(88), by3, P(38), P(38)), "next", () => SendMusic(2), n.CanNext);
+        AddBtn(g, new RectangleF(bx2 + P(136), by3, P(70), P(38)), "Lyrics", () => lyricsOpen = !lyricsOpen, false, lyricsOpen);
+
+        if (lyricsOpen) PaintLyricsPanel(g, new RectangleF(r.X, r.Y - P(340), r.Width, P(328)), n);
+    }
+
+    void AddIconBtn(Graphics g, RectangleF r, string kind, Action a, bool enabled)
+    {
+        bool hover = enabled && r.Contains(mouse);
+        bool main = kind == "play" || kind == "pause";
+        Color fill = main ? (hover ? Blend(Accent, Color.White, 0.12) : Accent) : (hover ? PanelHi : Panel);
+        using (var b = new SolidBrush(fill)) g.FillEllipse(b, r);
+        if (!main) using (var pen = new Pen(Line, 1)) g.DrawEllipse(pen, r);
+        Color ic = main ? OnColor(Accent) : (enabled ? TextC : Line);
+        float cx2 = r.X + r.Width / 2, cy2 = r.Y + r.Height / 2, s = r.Width * 0.2f;
+        using (var b = new SolidBrush(ic))
+        {
+            if (kind == "play") g.FillPolygon(b, new[] { new PointF(cx2 - s * 0.7f, cy2 - s), new PointF(cx2 - s * 0.7f, cy2 + s), new PointF(cx2 + s, cy2) });
+            else if (kind == "pause") { g.FillRectangle(b, cx2 - s * 0.85f, cy2 - s, s * 0.6f, s * 2); g.FillRectangle(b, cx2 + s * 0.25f, cy2 - s, s * 0.6f, s * 2); }
+            else
+            {
+                float dir = kind == "next" ? 1 : -1;
+                g.FillPolygon(b, new[] { new PointF(cx2 - dir * s * 0.8f, cy2 - s), new PointF(cx2 - dir * s * 0.8f, cy2 + s), new PointF(cx2 + dir * s * 0.6f, cy2) });
+                float barX = kind == "next" ? cx2 + s * 0.6f : cx2 - s * 0.6f - s * 0.35f;
+                g.FillRectangle(b, barX, cy2 - s, s * 0.35f, s * 2);
+            }
+        }
+        if (enabled) AddHit(r, a);
+    }
+
+    void PaintLyricsPanel(Graphics g, RectangleF r, NowPlaying n)
+    {
+        AddHit(r, () => { });
+        FillRound(g, Color.FromArgb(250, Panel), r, P(12));
+        DrawRound(g, Line, r, P(12), 1);
+        DrawT(g, "LYRICS", fLabel, Accent, r.X + P(18), r.Y + P(16));
+        AddBtn(g, new RectangleF(r.Right - P(84), r.Y + P(10), P(70), P(32)), "Close", () => lyricsOpen = false, false, false);
+        AddBtn(g, new RectangleF(r.Right - P(272), r.Y + P(10), P(180), P(32)), "In rounds: " + (lyricsInRound ? "On" : "Off"),
+            () => { lyricsInRound = !lyricsInRound; Save(); }, false, lyricsInRound);
+
+        var body = new RectangleF(r.X + P(18), r.Y + P(52), r.Width - P(36), r.Height - P(80));
+        var ls = lyrics;
+        string st = lyricsKey == n.Key ? lyricsState : "loading";
+        if (st != "ok" || ls == null)
+        {
+            string msg = st == "loading" ? "Looking up lyrics…" : st == "instrumental" ? "This song is instrumental." : st == "error" ? "Couldn't reach the lyrics site. Check your internet connection." : "No lyrics found for this song.";
+            DrawTC(g, msg, fBody, Muted, body);
+        }
+        else
+        {
+            int idx = LyricIndex(n, ls);
+            float lineH = P(34), mid = body.Y + body.Height / 2 - lineH / 2;
+            for (int k = -3; k <= 3; k++)
+            {
+                int i = idx + k;
+                if (i < 0 || i >= ls.Count) continue;
+                bool cur = k == 0;
+                int alpha = cur ? 255 : Math.Max(60, 200 - Math.Abs(k) * 50);
+                string text = ls[i].Text != "" ? ls[i].Text : "• • •";
+                DrawTC(g, text, cur ? fH3 : fBody, cur ? Color.FromArgb(alpha, Accent) : Color.FromArgb(alpha, Muted), new RectangleF(body.X, mid + k * lineH, body.Width, lineH));
+            }
+            if (idx < 0) DrawTC(g, "• • •", fH3, Muted, new RectangleF(body.X, mid, body.Width, lineH));
+        }
+        DrawT(g, (lyricsSynced || st != "ok" ? "" : "Not timed to the music  ·  ") + "Lyrics from LRCLIB", fSmall, Muted, r.X + P(18), r.Bottom - P(28));
+    }
+
+    void PaintMusicInRound(Graphics g)
+    {
+        var n = np;
+        if (n == null) return;
+        float W = ClientSize.Width, H = ClientSize.Height, m = P(28);
+        Color soft = playMode == RCT ? Color.FromArgb(190, 255, 255, 255) : Muted;
+        string line = (n.Playing ? "Now playing: " : "Paused: ") + (n.Artist != "" ? n.Artist + " – " : "") + n.Title;
+        using (var sf = new StringFormat(StringFormatFlags.NoWrap) { Trimming = StringTrimming.EllipsisCharacter })
+        using (var b = new SolidBrush(soft))
+            g.DrawString(line, fSmall, b, new RectangleF(m, H - m - P(20), W / 2 - m - P(80), P(20)), sf);
+        if (!lyricsInRound || playMode == RCT) return;
+        var ls = lyrics;
+        if (lyricsState != "ok" || ls == null || lyricsKey != n.Key) return;
+        int idx = LyricIndex(n, ls);
+        if (idx >= 0 && ls[idx].Text != "")
+            DrawTC(g, ls[idx].Text, fBody, Color.FromArgb(170, TextC), new RectangleF(0, m + P(52), W, P(28)));
     }
 
     void PaintSetup(Graphics g)
@@ -1293,8 +1674,11 @@ class Trainer : Form
         DrawT(g, "AIM TRAINER", fTitle, TextC, m, m);
         DrawT(g, "Playing as " + playerName + "  ·  " + globalDpi + " DPI.  Pick the game you want to practise for.", fBody, Muted, m + 2, m + P(56));
         AddBtn(g, new RectangleF(W - m - P(100), m, P(100), P(40)), "Exit", Close, false, false);
-        AddBtn(g, new RectangleF(W - m - P(270), m, P(160), P(40)), "Leaderboard ↗", OpenLeaderboard, false, false);
+        AddBtn(g, new RectangleF(W - m - P(270), m, P(160), P(40)), "Leaderboard", OpenLeaderboard, false, false);
         AddBtn(g, new RectangleF(W - m - P(420), m, P(140), P(40)), "Edit profile", GoSetup, false, false);
+        if (!musicDead)
+            AddBtn(g, new RectangleF(W - m - P(560), m, P(130), P(40)), "Music: " + (musicOn ? "On" : "Off"),
+                () => { musicOn = !musicOn; if (!musicOn) lyricsOpen = false; Save(); }, false, musicOn);
 
         float bannerY = m + P(100);
         if (updState != "" && updState != "later")
@@ -1312,7 +1696,7 @@ class Trainer : Form
                 AddBtn(g, new RectangleF(r.Right - P(130), r.Y + P(10), P(110), P(38)), "Later", () => updState = "later", false, false);
             }
             else if (updState == "error")
-                AddBtn(g, new RectangleF(r.Right - P(250), r.Y + P(10), P(230), P(38)), "Open download page ↗", OpenReleases, false, false);
+                AddBtn(g, new RectangleF(r.Right - P(250), r.Y + P(10), P(230), P(38)), "Open download page", OpenReleases, false, false);
             bannerY += P(70);
         }
         if (newsText != "")
@@ -1406,7 +1790,7 @@ class Trainer : Form
         y += P(54) + P(30);
 
         // progress
-        var pr = new RectangleF(x2, y, w2, Math.Max(P(170), H - y - m));
+        var pr = new RectangleF(x2, y, w2, Math.Max(P(170), H - y - m - (MusicVisible ? P(92) : 0)));
         FillRound(g, Panel, pr, P(12));
         if (mode == FND)
         {
@@ -1696,7 +2080,7 @@ class Trainer : Form
                 using (var mono = new Font("Consolas", 9.5f))
                     DrawTW(g, scoreCode, mono, TextC, new RectangleF(cp.X + P(24), cp.Y + P(46), cp.Width - P(48), P(44)));
                 AddBtn(g, new RectangleF(cp.X + P(24), cp.Y + P(98), P(180), P(42)), "Copy score code", CopyCode, true, false);
-                AddBtn(g, new RectangleF(cp.X + P(216), cp.Y + P(98), P(180), P(42)), "Open leaderboard ↗", OpenLeaderboard, false, false);
+                AddBtn(g, new RectangleF(cp.X + P(216), cp.Y + P(98), P(180), P(42)), "Open leaderboard", OpenLeaderboard, false, false);
                 DrawT(g, copyNote != "" ? copyNote : "Record your run so a mod can verify it.", fSmall, copyNote != "" ? Good : Muted, cp.X + P(24), cp.Y + P(148));
             }
         }

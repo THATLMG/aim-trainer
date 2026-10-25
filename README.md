@@ -11,6 +11,9 @@ A small Windows aim trainer with game profiles for Minecraft, Roblox, CS2, Valor
 - **Reaction**: click the moment the screen turns green.
 - **Sens finder**: blind test to find the sensitivity you aim best with.
 
+## Music
+The music bar shows what's playing in Spotify, YouTube, Apple Music and most other players, with previous, play/pause and skip buttons. Click **Lyrics** for lyrics that follow along with the song (from [LRCLIB](https://lrclib.net)). Turn it off with **Music: On/Off** on the home screen.
+
 After each round a sensitivity coach suggests a better sens for your game, and you get a score code for the leaderboard.
 
 ## Updates

@@ -1,9 +1,11 @@
 # Builds AimTrainer.exe and the shareable zips from AimTrainer.cs.
 $ErrorActionPreference = 'Stop'
 Set-Location $PSScriptRoot
-$csc = 'C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe'
-& $csc /nologo /codepage:65001 /target:winexe /optimize /out:AimTrainer.exe `
-    /r:System.Windows.Forms.dll /r:System.Drawing.dll /r:System.Core.dll /r:System.Web.Extensions.dll AimTrainer.cs
+$fw = 'C:\Windows\Microsoft.NET\Framework64\v4.0.30319'
+$wm = 'C:\Windows\System32\WinMetadata'   # Windows media controls for the music player
+& "$fw\csc.exe" /nologo /codepage:65001 /target:winexe /optimize /out:AimTrainer.exe `
+    /r:System.Windows.Forms.dll /r:System.Drawing.dll /r:System.Core.dll /r:System.Web.Extensions.dll `
+    "/r:$fw\System.Runtime.dll" "/r:$wm\Windows.Foundation.winmd" "/r:$wm\Windows.Media.winmd" "/r:$wm\Windows.Storage.winmd" AimTrainer.cs
 if ($LASTEXITCODE -ne 0) { throw 'Compile failed' }
 
 # AimTrainer.zip: the app plus the readme
