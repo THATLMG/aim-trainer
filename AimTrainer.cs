@@ -1,0 +1,1750 @@
+// Aim Trainer: tracking, flick and reaction practice with a sensitivity coach.
+// Reads raw mouse movement so your in-game sensitivity can be matched.
+using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.Drawing;
+using System.Drawing.Drawing2D;
+using System.Drawing.Text;
+using System.Globalization;
+using System.IO;
+using System.Linq;
+using System.Net;
+using System.Runtime.InteropServices;
+using System.Web.Script.Serialization;
+using System.Threading;
+using System.Windows.Forms;
+
+class GameInfo
+{
+    public string Id, Name, Tagline, Suffix = "", Note = "";
+    public Color Accent, Bg;
+    public double Yaw, HFov, DefaultSens;
+    public int Decimals;
+    public bool Minecraft, Jumps, Square;
+    public double HorizBias, SizeMul = 1, Band = 0.8;
+
+    // Degrees the camera turns per mouse count at a given in-game sensitivity.
+    public double DegPerCount(double sens)
+    {
+        if (Minecraft) { double f = (sens / 200.0) * 0.6 + 0.2; return f * f * f * 1.2; }
+        return sens * Yaw;
+    }
+    public double SensFor(double degPerCount)
+    {
+        if (Minecraft) { double f = Math.Pow(degPerCount / 1.2, 1.0 / 3.0); return Math.Max(1, (f - 0.2) / 0.6 * 200.0); }
+        return degPerCount / Yaw;
+    }
+    public double Round(double sens) { return Math.Round(sens, Decimals); }
+    public string Fmt(double sens) { return Round(sens).ToString("F" + Decimals, CultureInfo.InvariantCulture) + Suffix; }
+}
+
+class Rec { public string Game, Mode; public int Diff; public double Score; public DateTime When; }
+
+class Btn { public RectangleF R; public Action Click; }
+
+// A capsule-shaped practice bot. U is its body width; Ground is where its feet stand.
+class Bot
+{
+    public double X, Ground, U, Vx, Speed, Origin, Range, DirTimer, Hp, Flash, DeadT, SpawnT;
+    public bool Strafe, Dead;
+}
+
+class Trainer : Form
+{
+    [DllImport("user32.dll")] static extern bool SetProcessDPIAware();
+    [DllImport("user32.dll")] static extern bool RegisterRawInputDevices(RAWINPUTDEVICE[] devices, uint count, uint size);
+    [DllImport("user32.dll")] static extern uint GetRawInputData(IntPtr hRaw, uint cmd, IntPtr data, ref uint size, uint headerSize);
+    [DllImport("user32.dll")] static extern bool PeekMessage(out NativeMsg msg, IntPtr hWnd, uint min, uint max, uint remove);
+    [DllImport("winmm.dll")] static extern uint timeBeginPeriod(uint ms);
+    [StructLayout(LayoutKind.Sequential)] struct RAWINPUTDEVICE { public ushort UsagePage, Usage; public uint Flags; public IntPtr Target; }
+    [StructLayout(LayoutKind.Sequential)] struct NativeMsg { public IntPtr hWnd; public uint msg; public IntPtr wParam, lParam; public uint time; public Point pt; }
+    const int WM_INPUT = 0x00FF;
+    const uint RID_INPUT = 0x10000003;
+
+    const string TRK = "Tracking", FLK = "Flick", BOT = "Bots", RCT = "Reaction", FND = "Sens finder";
+    const string AppVersion = "1.1.0";
+    const string Repo = "THATLMG/aim-trainer";
+    static readonly string[] DiffNames = { "Easy", "Medium", "Hard", "Insane" };
+    static readonly double[] BallR = { 0.045, 0.033, 0.024, 0.017 };
+    static readonly double[] BallSpeed = { 0.22, 0.36, 0.50, 0.65 };
+    static readonly double[] FlickR = { 0.042, 0.032, 0.024, 0.017 };
+    static readonly double[] FlickMin = { 0.12, 0.16, 0.20, 0.25 };
+    static readonly double[] FlickMax = { 0.28, 0.36, 0.45, 0.50 };
+    static readonly double[] FlickTimeout = { 0, 0, 1.6, 1.0 };
+    static readonly double[] BotU = { 0.075, 0.06, 0.05, 0.04 };          // body width as a share of screen height
+    static readonly double[] BotStrafeShare = { 0.3, 0.5, 0.7, 0.85 };    // how many bots strafe instead of standing
+    static readonly double[] BotSpeed = { 2.5, 3.5, 4.5, 6.0 };           // body widths per second
+    static readonly int[] BotCount = { 2, 3, 4, 5 };
+
+    static readonly Color UiBg = Color.FromArgb(15, 17, 21), Panel = Color.FromArgb(27, 30, 36), PanelHi = Color.FromArgb(38, 42, 50);
+    static readonly Color Line = Color.FromArgb(55, 60, 70), TextC = Color.FromArgb(236, 239, 243), Muted = Color.FromArgb(150, 158, 170);
+    static readonly Color Good = Color.FromArgb(84, 204, 124);
+
+    List<GameInfo> games = new List<GameInfo>();
+    GameInfo game;
+    string mode = TRK;
+    int diff = 1;
+    enum Scr { Setup, Home, Game, Play, Results }
+    Scr scr = Scr.Home;
+
+    const string LeaderboardUrl = "https://claude.ai/artifact/2qWk4AinKqbFxrjk6AHboB";
+    const string CodeSecret = "aimtrainer-board-v1-7Qp2xK";   // must match the leaderboard page
+
+    Dictionary<string, double[]> settings = new Dictionary<string, double[]>();
+    List<Rec> recs = new List<Rec>();
+    string dataPath;
+    string playerName = "";
+    double globalDpi = 800;
+    string setupError = "", scoreCode = "", copyNote = "";
+    TextBox sensBox, dpiBox, nameBox, setupDpiBox;
+    bool loadingBoxes;
+    List<Btn> btns = new List<Btn>();
+    Point mouse;
+    float S = 1;
+    Font fTitle, fH2, fH3, fBody, fSmall, fLabel, fBig, fHuge, fBtn;
+    Stopwatch sw = Stopwatch.StartNew();
+    Random rnd = new Random();
+
+    // input
+    IntPtr rawBuf = Marshal.AllocHGlobal(256);
+    bool useRaw, locked;
+    int rawDx, rawDy;
+
+    // round state
+    string playMode;
+    int playDiff;
+    double last, timeLeft, roundLen, countdown, pxPerCount, mult = 1;
+    float cx, cy;
+    RectangleF arena;
+
+    // tracking ball
+    double bx, by, bvx, bvy, dirX, dirY, heading, turnRate, turnTimer, changeTimer, speedMul = 1, jumpOff, jumpV, jumpTimer, br, ballSpeed;
+    double onTime, totTime, leadSum, leadTime, crossPath, ballPath;
+
+    // flick
+    double tx, ty, tr, spawnT, flickD, ux, uy, startX, startY, smoothSpd, peakSpd;
+    bool primaryDone;
+    int hits, misses, expired;
+    List<double> hitTimes = new List<double>(), progress = new List<double>();
+
+    // bots
+    List<Bot> bots = new List<Bot>();
+    int shots, botHits, headHits, kills, headKills;
+    List<double> ttk = new List<double>();
+    double hitMarkT;
+    bool hitMarkHead;
+    List<double[]> path = new List<double[]>();   // crosshair x, y, speed since the last kill, for the coach
+    double pathStartX, pathStartY;
+    bool pathFresh;
+
+    // updates and news
+    string updVersion = "", updNotes = "", updUrl = "", updState = "";
+    string newsId = "", newsText = "", seenNews = "";
+
+    // reaction: 0 intro, 1 red, 2 green, 3 showing a time, 4 false start
+    int rState;
+    double greenAt, greenShown, lastReaction;
+    bool markGreen;
+    List<double> rTimes = new List<double>();
+
+    // sens finder
+    double[] fMults, fScores;
+    int fIdx;
+
+    // results
+    string resTitle, resMain, resLabel, coachHead, coachText;
+    List<string> resLines = new List<string>();
+    double sugSens = double.NaN;
+    bool resPB, sugApplied, showCoach;
+
+    public Trainer()
+    {
+        SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint | ControlStyles.OptimizedDoubleBuffer, true);
+        Text = "Aim Trainer";
+        FormBorderStyle = FormBorderStyle.None;
+        StartPosition = FormStartPosition.Manual;
+        Bounds = Screen.FromPoint(Cursor.Position).Bounds;
+        WindowState = FormWindowState.Maximized;
+        BackColor = UiBg;
+        KeyPreview = true;
+        Icon = MakeIcon();
+
+        fTitle = new Font("Bahnschrift", 30, FontStyle.Bold);
+        fH2 = new Font("Bahnschrift", 17, FontStyle.Bold);
+        fH3 = new Font("Bahnschrift", 13, FontStyle.Bold);
+        fBody = new Font("Segoe UI", 11);
+        fSmall = new Font("Segoe UI", 9.5f);
+        fLabel = new Font("Bahnschrift", 9.5f, FontStyle.Bold);
+        fBig = new Font("Bahnschrift", 44, FontStyle.Bold);
+        fHuge = new Font("Bahnschrift", 84, FontStyle.Bold);
+        fBtn = new Font("Segoe UI Semibold", 11);
+
+        AddGames();
+        dataPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "AimTrainer", "data.txt");
+        LoadData();
+
+        sensBox = MakeBox();
+        dpiBox = MakeBox();
+        sensBox.TextChanged += delegate { BoxChanged(); };
+        dpiBox.TextChanged += delegate { BoxChanged(); };
+        nameBox = MakeBox();
+        nameBox.MaxLength = 16;
+        setupDpiBox = MakeBox();
+        if (playerName == "") { scr = Scr.Setup; ShowSetupBoxes(true); }
+
+        MouseMove += delegate(object s, MouseEventArgs e) { if (scr != Scr.Play) { mouse = e.Location; Invalidate(); } };
+        MouseDown += OnDown;
+        KeyDown += OnKey;
+        Deactivate += delegate { if (scr == Scr.Play) AbortPlay(); };
+        Resize += delegate { Invalidate(); };
+        FormClosing += delegate { UnlockMouse(); };
+        Application.Idle += OnIdle;
+    }
+
+    void AddGames()
+    {
+        games.Add(new GameInfo { Id = "minecraft", Name = "Minecraft", Tagline = "PvP strafes and jump-hits", Suffix = "%", Minecraft = true, HFov = 102, DefaultSens = 100, Decimals = 0, HorizBias = 0.6, Jumps = true, SizeMul = 1.25, Square = true, Band = 0.8, Accent = Color.FromArgb(108, 178, 60), Bg = Color.FromArgb(22, 28, 20), Note = "Use the Sensitivity % from Options > Controls > Mouse Settings." });
+        games.Add(new GameInfo { Id = "roblox", Name = "Roblox", Tagline = "Bigger, bouncy targets", Yaw = 0.025, HFov = 102, DefaultSens = 1.0, Decimals = 2, HorizBias = 0.5, Jumps = true, SizeMul = 1.3, Band = 0.9, Accent = Color.FromArgb(40, 160, 255), Bg = Color.FromArgb(18, 23, 32), Note = "Roblox sens varies between games, so the conversion is approximate." });
+        games.Add(new GameInfo { Id = "cs2", Name = "CS2", Tagline = "Counter-strafes at head height", Yaw = 0.022, HFov = 106.26, DefaultSens = 1.5, Decimals = 2, HorizBias = 0.9, SizeMul = 0.9, Band = 0.25, Accent = Color.FromArgb(240, 162, 59), Bg = Color.FromArgb(26, 23, 19) });
+        games.Add(new GameInfo { Id = "valorant", Name = "Valorant", Tagline = "Sharp flicks, tight strafes", Yaw = 0.07, HFov = 103, DefaultSens = 0.35, Decimals = 3, HorizBias = 0.9, SizeMul = 0.85, Band = 0.25, Accent = Color.FromArgb(255, 84, 98), Bg = Color.FromArgb(27, 19, 23) });
+        games.Add(new GameInfo { Id = "fortnite", Name = "Fortnite", Tagline = "Build-fight tracking", Suffix = "%", Yaw = 0.005555, HFov = 103, DefaultSens = 6.5, Decimals = 1, HorizBias = 0.5, Jumps = true, Band = 0.8, Accent = Color.FromArgb(166, 102, 255), Bg = Color.FromArgb(22, 19, 32), Note = "Use the X-axis sensitivity %." });
+        games.Add(new GameInfo { Id = "overwatch", Name = "Overwatch 2", Tagline = "Fast heroes, lots of vertical", Yaw = 0.0066, HFov = 103, DefaultSens = 5, Decimals = 2, HorizBias = 0.55, Jumps = true, SizeMul = 1.1, Band = 0.7, Accent = Color.FromArgb(249, 158, 26), Bg = Color.FromArgb(21, 24, 30) });
+        games.Add(new GameInfo { Id = "apex", Name = "Apex Legends", Tagline = "Long strafes and slides", Yaw = 0.022, HFov = 110, DefaultSens = 2.0, Decimals = 2, HorizBias = 0.7, Band = 0.6, Accent = Color.FromArgb(222, 84, 68), Bg = Color.FromArgb(26, 21, 21) });
+        games.Add(new GameInfo { Id = "custom", Name = "Custom", Tagline = "Any game with CS2-style sens", Yaw = 0.022, HFov = 103, DefaultSens = 1.0, Decimals = 2, HorizBias = 0.6, Band = 0.8, Accent = Color.FromArgb(60, 196, 176), Bg = Color.FromArgb(17, 26, 26), Note = "Uses CS2 / Apex / Source sensitivity numbers." });
+    }
+
+    protected override void OnHandleCreated(EventArgs e)
+    {
+        base.OnHandleCreated(e);
+        using (var g = CreateGraphics()) S = g.DpiX / 96f;
+        var dev = new RAWINPUTDEVICE[] { new RAWINPUTDEVICE { UsagePage = 1, Usage = 2, Flags = 0, Target = Handle } };
+        useRaw = RegisterRawInputDevices(dev, 1, (uint)Marshal.SizeOf(typeof(RAWINPUTDEVICE)));
+        var t = new Thread(CheckOnline) { IsBackground = true };
+        t.Start();
+    }
+
+    // ---------- updates and news (from the public GitHub repo) ----------
+    static WebClient Web()
+    {
+        ServicePointManager.SecurityProtocol |= (SecurityProtocolType)3072;   // TLS 1.2, which GitHub requires
+        var wc = new WebClient { Encoding = System.Text.Encoding.UTF8 };
+        wc.Headers["User-Agent"] = "AimTrainer/" + AppVersion;
+        return wc;
+    }
+
+    void CheckOnline()
+    {
+        var js = new JavaScriptSerializer();
+        try
+        {
+            using (var wc = Web())
+            {
+                var rel = js.Deserialize<Dictionary<string, object>>(wc.DownloadString("https://api.github.com/repos/" + Repo + "/releases/latest"));
+                string tag = ((string)rel["tag_name"]).TrimStart('v', 'V');
+                Version remote;
+                if (Version.TryParse(tag, out remote) && remote > new Version(AppVersion))
+                {
+                    string url = null;
+                    foreach (var a in (System.Collections.IEnumerable)rel["assets"])
+                    {
+                        var d = (Dictionary<string, object>)a;
+                        if ((string)d["name"] == "AimTrainer.exe") url = (string)d["browser_download_url"];
+                    }
+                    string body = rel.ContainsKey("body") && rel["body"] != null ? (string)rel["body"] : "";
+                    string first = body.Split('\n').Select(l => l.Trim().TrimStart('-', '*', '#', ' ')).FirstOrDefault(l => l.Length > 0) ?? "";
+                    if (url != null)
+                        BeginInvoke((MethodInvoker)delegate { updVersion = tag; updNotes = first; updUrl = url; updState = "available"; Invalidate(); });
+                }
+            }
+        }
+        catch { }
+        try
+        {
+            using (var wc = Web())
+            {
+                var n = js.Deserialize<Dictionary<string, object>>(wc.DownloadString("https://raw.githubusercontent.com/" + Repo + "/main/news.json"));
+                string id = n.ContainsKey("id") ? Convert.ToString(n["id"]) : "", text = n.ContainsKey("text") ? Convert.ToString(n["text"]) : "";
+                if (id != "" && text != "")
+                    BeginInvoke((MethodInvoker)delegate { if (id != seenNews) { newsId = id; newsText = text; Invalidate(); } });
+            }
+        }
+        catch { }
+    }
+
+    void DoUpdate()
+    {
+        updState = "downloading";
+        Invalidate();
+        var t = new Thread(delegate()
+        {
+            string exe = Application.ExecutablePath, tmp = exe + ".new", old = exe + ".old";
+            try
+            {
+                using (var wc = Web()) wc.DownloadFile(updUrl, tmp);
+                var head = new byte[2];
+                using (var f = File.OpenRead(tmp)) f.Read(head, 0, 2);
+                if (head[0] != 'M' || head[1] != 'Z' || new FileInfo(tmp).Length < 30000) throw new Exception("not a program");
+                if (File.Exists(old)) File.Delete(old);
+                File.Move(exe, old);      // Windows lets a running program be renamed, not overwritten
+                try { File.Move(tmp, exe); }
+                catch { File.Move(old, exe); throw; }
+                BeginInvoke((MethodInvoker)delegate { UnlockMouse(); Process.Start(exe); Close(); });
+            }
+            catch
+            {
+                try { if (File.Exists(tmp)) File.Delete(tmp); } catch { }
+                BeginInvoke((MethodInvoker)delegate { updState = "error"; Invalidate(); });
+            }
+        }) { IsBackground = true };
+        t.Start();
+    }
+
+    static void OpenReleases()
+    {
+        try { Process.Start("https://github.com/" + Repo + "/releases/latest"); } catch { }
+    }
+
+    void DismissNews()
+    {
+        seenNews = newsId;
+        newsText = "";
+        Save();
+    }
+
+    protected override void WndProc(ref Message m)
+    {
+        if (m.Msg == WM_INPUT) ReadRaw(m.LParam);
+        base.WndProc(ref m);
+    }
+
+    void ReadRaw(IntPtr h)
+    {
+        uint header = (uint)(8 + 2 * IntPtr.Size), size = 0;
+        GetRawInputData(h, RID_INPUT, IntPtr.Zero, ref size, header);
+        if (size == 0 || size > 256) return;
+        if (GetRawInputData(h, RID_INPUT, rawBuf, ref size, header) != size) return;
+        if (Marshal.ReadInt32(rawBuf, 0) != 0) return;                  // not a mouse
+        if ((Marshal.ReadInt16(rawBuf, (int)header) & 1) != 0) return;   // absolute (tablet / remote desktop)
+        rawDx += Marshal.ReadInt32(rawBuf, (int)header + 12);
+        rawDy += Marshal.ReadInt32(rawBuf, (int)header + 16);
+    }
+
+    // ---------- data ----------
+    double Sens(GameInfo g) { double[] v; return settings.TryGetValue(g.Id, out v) ? v[0] : g.DefaultSens; }
+    double Dpi(GameInfo g) { double[] v; return settings.TryGetValue(g.Id, out v) ? v[1] : globalDpi; }
+
+    void LoadData()
+    {
+        try
+        {
+            if (!File.Exists(dataPath)) return;
+            var ci = CultureInfo.InvariantCulture;
+            foreach (var line in File.ReadAllLines(dataPath))
+            {
+                var p = line.Split('\t');
+                if (p[0] == "P" && p.Length >= 3) { playerName = CleanName(p[1]); globalDpi = double.Parse(p[2], ci); }
+                if (p[0] == "N" && p.Length >= 2) seenNews = p[1];
+                if (p[0] == "S" && p.Length >= 4) settings[p[1]] = new[] { double.Parse(p[2], ci), double.Parse(p[3], ci) };
+                if (p[0] == "R" && p.Length >= 6)
+                    recs.Add(new Rec { Game = p[1], Mode = p[2], Diff = int.Parse(p[3], ci), Score = double.Parse(p[4], ci), When = DateTime.Parse(p[5], ci) });
+            }
+        }
+        catch { }
+    }
+
+    void Save()
+    {
+        try
+        {
+            var ci = CultureInfo.InvariantCulture;
+            var lines = new List<string>();
+            if (playerName != "") lines.Add(string.Format(ci, "P\t{0}\t{1}", playerName, globalDpi));
+            if (seenNews != "") lines.Add("N\t" + seenNews.Replace("\t", " "));
+            foreach (var kv in settings) lines.Add(string.Format(ci, "S\t{0}\t{1}\t{2}", kv.Key, kv.Value[0], kv.Value[1]));
+            foreach (var r in recs) lines.Add(string.Format(ci, "R\t{0}\t{1}\t{2}\t{3}\t{4:yyyy-MM-dd HH:mm}", r.Game, r.Mode, r.Diff, r.Score, r.When));
+            Directory.CreateDirectory(Path.GetDirectoryName(dataPath));
+            File.WriteAllLines(dataPath, lines);
+        }
+        catch { }
+    }
+
+    List<Rec> History(string m, int d)
+    {
+        return recs.Where(r => r.Game == game.Id && r.Mode == m && (m == RCT || r.Diff == d)).ToList();
+    }
+
+    bool SaveRec(string m, int d, double score, bool lowerBetter)
+    {
+        var prev = History(m, d);
+        bool pb = prev.Count > 0 && (lowerBetter ? score < prev.Min(r => r.Score) : score > prev.Max(r => r.Score));
+        recs.Add(new Rec { Game = game.Id, Mode = m, Diff = d, Score = score, When = DateTime.Now });
+        Save();
+        return pb;
+    }
+
+    // ---------- text boxes ----------
+    TextBox MakeBox()
+    {
+        var t = new TextBox { Font = new Font("Segoe UI", 14), BorderStyle = BorderStyle.FixedSingle, BackColor = PanelHi, ForeColor = TextC, Visible = false };
+        Controls.Add(t);
+        return t;
+    }
+
+    void BoxChanged()
+    {
+        if (loadingBoxes || game == null) return;
+        double s, d;
+        if (TryNum(sensBox.Text, out s) && s > 0 && TryNum(dpiBox.Text, out d) && d >= 100 && d <= 50000)
+        {
+            settings[game.Id] = new[] { s, d };
+            Save();
+            Invalidate();
+        }
+    }
+
+    static bool TryNum(string s, out double v)
+    {
+        return double.TryParse(s.Trim().TrimEnd('%').Replace(',', '.'), NumberStyles.Float, CultureInfo.InvariantCulture, out v);
+    }
+
+    void ShowBoxes(bool show)
+    {
+        if (show && game != null)
+        {
+            loadingBoxes = true;
+            sensBox.Text = game.Round(Sens(game)).ToString(CultureInfo.InvariantCulture);
+            dpiBox.Text = Dpi(game).ToString(CultureInfo.InvariantCulture);
+            loadingBoxes = false;
+        }
+        sensBox.Visible = dpiBox.Visible = show;
+        if (!show) ActiveControl = null;
+    }
+
+    void Place(TextBox t, float x, float y, float w)
+    {
+        var p = new Point((int)x, (int)y);
+        if (t.Location != p) t.Location = p;
+        if (t.Width != (int)w) t.Width = (int)w;
+    }
+
+    // ---------- navigation ----------
+    void GoHome() { scr = Scr.Home; ShowBoxes(false); Invalidate(); }
+    void GoGame(GameInfo g) { game = g; scr = Scr.Game; ShowBoxes(true); Invalidate(); }
+
+    // ---------- profile setup ----------
+    void ShowSetupBoxes(bool show)
+    {
+        if (show)
+        {
+            nameBox.Text = playerName;
+            setupDpiBox.Text = globalDpi.ToString(CultureInfo.InvariantCulture);
+            setupError = "";
+        }
+        nameBox.Visible = setupDpiBox.Visible = show;
+        if (show) nameBox.Focus(); else ActiveControl = null;
+    }
+
+    void GoSetup() { scr = Scr.Setup; ShowBoxes(false); ShowSetupBoxes(true); Invalidate(); }
+
+    void LeaveSetup() { ShowSetupBoxes(false); GoHome(); }
+
+    void FinishSetup()
+    {
+        string n = CleanName(nameBox.Text);
+        double d;
+        if (n.Length < 2) { setupError = "Pick a player name with at least 2 letters or numbers."; Invalidate(); return; }
+        if (!TryNum(setupDpiBox.Text, out d) || d < 100 || d > 50000) { setupError = "Enter your mouse DPI as a number, like 800 or 1600."; Invalidate(); return; }
+        // Games that were still using the old profile DPI follow the new one.
+        foreach (var kv in settings) if (kv.Value[1] == globalDpi) kv.Value[1] = d;
+        playerName = n;
+        globalDpi = Math.Round(d);
+        Save();
+        LeaveSetup();
+    }
+
+    static string CleanName(string s)
+    {
+        var sb = new System.Text.StringBuilder();
+        foreach (char c in s.Trim())
+            if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '-' || c == ' ') sb.Append(c);
+        string r = sb.ToString().Trim();
+        return r.Length > 16 ? r.Substring(0, 16).Trim() : r;
+    }
+
+    // ---------- score codes ----------
+    // AIM1.<base64url payload>.<checksum>; the leaderboard page checks the checksum the same way.
+    string MakeCode(string modeLetter, int d, string score)
+    {
+        var ci = CultureInfo.InvariantCulture;
+        long unix = (long)(DateTime.UtcNow - new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalSeconds;
+        string payload = string.Join("|", new[] { "v1", playerName, game.Id, modeLetter, d.ToString(ci), score,
+            game.Round(Sens(game)).ToString(ci), ((int)Dpi(game)).ToString(ci), unix.ToString(ci) });
+        string b64 = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(payload)).TrimEnd('=').Replace('+', '-').Replace('/', '_');
+        return "AIM1." + b64 + "." + Fnv(CodeSecret + payload).ToString("x8");
+    }
+
+    static uint Fnv(string s)
+    {
+        uint h = 2166136261;
+        foreach (byte b in System.Text.Encoding.UTF8.GetBytes(s)) { h ^= b; h = unchecked(h * 16777619); }
+        return h;
+    }
+
+    void CopyCode()
+    {
+        try { Clipboard.SetText(scoreCode); copyNote = "Copied! Paste it on the leaderboard's Submit tab."; }
+        catch { copyNote = "Couldn't copy. Try again."; }
+    }
+
+    static void OpenLeaderboard()
+    {
+        try { Process.Start(LeaderboardUrl); } catch { }
+    }
+
+    void OnKey(object sender, KeyEventArgs e)
+    {
+        if (scr == Scr.Setup)
+        {
+            if (e.KeyCode == Keys.Enter) { FinishSetup(); e.Handled = e.SuppressKeyPress = true; }
+            else if (e.KeyCode == Keys.Escape && playerName != "") { LeaveSetup(); e.Handled = e.SuppressKeyPress = true; }
+            return;
+        }
+        bool inBox = sensBox.Focused || dpiBox.Focused;
+        if (e.KeyCode == Keys.Escape)
+        {
+            if (scr == Scr.Play) AbortPlay();
+            else if (scr == Scr.Results) GoGame(game);
+            else if (scr == Scr.Game) GoHome();
+            e.Handled = e.SuppressKeyPress = true;
+        }
+        else if (e.KeyCode == Keys.Enter && inBox) { ActiveControl = null; e.Handled = e.SuppressKeyPress = true; }
+        else if ((e.KeyCode == Keys.Space || e.KeyCode == Keys.Enter) && !inBox)
+        {
+            if (scr == Scr.Game || scr == Scr.Results) StartPlay(mode);
+            else if (scr == Scr.Play && playMode == RCT) ReactionClick(sw.Elapsed.TotalSeconds);
+            e.Handled = e.SuppressKeyPress = true;
+        }
+    }
+
+    void OnDown(object sender, MouseEventArgs e)
+    {
+        if (e.Button != MouseButtons.Left) return;
+        if (scr == Scr.Play)
+        {
+            double now = sw.Elapsed.TotalSeconds;
+            if (playMode == RCT) ReactionClick(now);
+            else if (playMode == FLK && countdown <= 0) FlickClick(now);
+            else if (playMode == BOT && countdown <= 0) BotClick(now);
+            return;
+        }
+        ActiveControl = null;
+        for (int i = btns.Count - 1; i >= 0; i--)
+            if (btns[i].R.Contains(e.Location)) { btns[i].Click(); Invalidate(); return; }
+    }
+
+    // ---------- mouse lock ----------
+    void LockMouse()
+    {
+        if (locked) return;
+        Cursor.Position = PointToScreen(new Point(ClientSize.Width / 2, ClientSize.Height / 2));
+        Cursor.Clip = RectangleToScreen(ClientRectangle);
+        Cursor.Hide();
+        locked = true;
+    }
+
+    void UnlockMouse()
+    {
+        if (!locked) return;
+        Cursor.Clip = Rectangle.Empty;
+        Cursor.Show();
+        locked = false;
+    }
+
+    double PxPerCount(double m)
+    {
+        double f = (ClientSize.Width / 2.0) / Math.Tan(game.HFov / 2 * Math.PI / 180);
+        return game.DegPerCount(Sens(game)) * m * f * Math.PI / 180;
+    }
+
+    // ---------- round setup ----------
+    void StartPlay(string m)
+    {
+        if (game == null) return;
+        playMode = m;
+        playDiff = m == FND ? 1 : diff;
+        scr = Scr.Play;
+        ShowBoxes(false);
+        Focus();
+        float W = ClientSize.Width, H = ClientSize.Height;
+        float ah = H * (float)(0.25 + 0.5 * game.Band);
+        arena = new RectangleF(W * 0.12f, (H - ah) / 2, W * 0.76f, ah);
+        if (m == BOT) arena = new RectangleF(W * 0.08f, H * 0.2f, W * 0.84f, H * 0.68f);
+        cx = W / 2; cy = H / 2;
+        mult = 1;
+        hits = misses = expired = 0;
+        hitTimes.Clear(); progress.Clear(); rTimes.Clear();
+        shots = botHits = headHits = kills = headKills = 0;
+        ttk.Clear(); bots.Clear(); path.Clear();
+        hitMarkT = 0; pathFresh = false;
+        if (m == BOT) for (int i = 0; i < BotCount[playDiff]; i++) SpawnBot(0);
+        ResetTrackStats();
+        rawDx = rawDy = 0;
+        sugSens = double.NaN; sugApplied = false;
+
+        if (m == FND)
+        {
+            fMults = new[] { 0.8, 0.9, 1.0, 1.1, 1.2 }.OrderBy(x => rnd.Next()).ToArray();
+            fScores = new double[5];
+            fIdx = 0;
+            mult = fMults[0];
+        }
+        pxPerCount = PxPerCount(mult);
+        roundLen = timeLeft = m == FND ? 10 : 30;
+
+        if (m == RCT) { rState = 0; countdown = 0; UnlockMouse(); }
+        else { countdown = 3; LockMouse(); ResetBall(); }
+        last = sw.Elapsed.TotalSeconds;
+        Invalidate();
+    }
+
+    void ResetTrackStats() { onTime = totTime = leadSum = leadTime = crossPath = ballPath = 0; }
+
+    void ResetBall()
+    {
+        float H = ClientSize.Height;
+        br = BallR[playDiff] * H * game.SizeMul;
+        ballSpeed = BallSpeed[playDiff] * H;
+        bx = arena.X + arena.Width / 2;
+        by = arena.Y + arena.Height / 2;
+        dirX = rnd.Next(2) == 0 ? -1 : 1; dirY = 0;
+        heading = Math.Atan2(dirY, dirX);
+        turnTimer = changeTimer = 0.6;
+        speedMul = 1;
+        jumpOff = jumpV = 0;
+        jumpTimer = 1.5;
+        bvx = bvy = 0;
+    }
+
+    void AbortPlay()
+    {
+        UnlockMouse();
+        GoGame(game);
+    }
+
+    // ---------- main loop ----------
+    void OnIdle(object sender, EventArgs e)
+    {
+        NativeMsg msg;
+        while (scr == Scr.Play && !PeekMessage(out msg, IntPtr.Zero, 0, 0, 0)) Frame();
+    }
+
+    void Frame()
+    {
+        double now = sw.Elapsed.TotalSeconds;
+        double dt = Math.Min(0.05, now - last);
+        last = now;
+
+        int dx = 0, dy = 0;
+        if (locked)
+        {
+            if (useRaw) { dx = rawDx; dy = rawDy; }
+            else
+            {
+                Point c = PointToScreen(new Point(ClientSize.Width / 2, ClientSize.Height / 2)), p = Cursor.Position;
+                dx = p.X - c.X; dy = p.Y - c.Y;
+                Cursor.Position = c;
+            }
+        }
+        rawDx = rawDy = 0;
+
+        double moved = 0;
+        if (playMode != RCT)
+        {
+            float ox = cx, oy = cy;
+            cx = Math.Max(0, Math.Min(ClientSize.Width, cx + (float)(dx * pxPerCount)));
+            cy = Math.Max(0, Math.Min(ClientSize.Height, cy + (float)(dy * pxPerCount)));
+            moved = Math.Sqrt((cx - ox) * (cx - ox) + (cy - oy) * (cy - oy));
+        }
+
+        if (countdown > 0)
+        {
+            countdown -= dt;
+            if (countdown <= 0)
+            {
+                countdown = 0;
+                if (playMode == FLK) SpawnTarget(now);
+                if (playMode == BOT) { foreach (var b in bots) b.SpawnT = now; StartPath(); }
+            }
+        }
+        else if (dt > 0) Step(dt, now, moved);
+
+        if (scr == Scr.Play) { Invalidate(); Update(); }
+        if (markGreen) { greenShown = sw.Elapsed.TotalSeconds; markGreen = false; }
+        if (sw.Elapsed.TotalSeconds - now < 0.002) Thread.Sleep(1);
+    }
+
+    void Step(double dt, double now, double moved)
+    {
+        if (playMode == RCT)
+        {
+            if (rState == 1 && now >= greenAt) { rState = 2; markGreen = true; }
+            return;
+        }
+        if (playMode == FLK) StepFlick(dt, now, moved);
+        else if (playMode == BOT) StepBots(dt, now, moved);
+        else StepTracking(dt, moved);
+
+        timeLeft -= dt;
+        if (timeLeft <= 0) RoundOver();
+    }
+
+    bool Hit(double dx, double dy, double r)
+    {
+        if (game.Square) return Math.Abs(dx) <= r && Math.Abs(dy) <= r;
+        return dx * dx + dy * dy <= r * r;
+    }
+
+    // ---------- tracking ----------
+    void StepTracking(double dt, double moved)
+    {
+        UpdateBall(dt);
+        double dx = cx - bx, dy = cy - (by + jumpOff);
+        totTime += dt;
+        if (Hit(dx, dy, br)) onTime += dt;
+
+        double sp = Math.Sqrt(bvx * bvx + bvy * bvy), dist = Math.Sqrt(dx * dx + dy * dy);
+        if (dist < 3 * br && sp > 1)
+        {
+            leadSum += (dx * bvx + dy * bvy) / sp / br * dt;   // + ahead of the ball, - behind it
+            leadTime += dt;
+            crossPath += moved;
+            ballPath += sp * dt;
+        }
+    }
+
+    double JumpH() { return ClientSize.Height * 0.1; }
+
+    void UpdateBall(double dt)
+    {
+        double H = ClientSize.Height, G = 3.0 * H;
+        double vScale = 1 - 0.75 * game.HorizBias;
+        if (playDiff == 0)
+        {
+            turnTimer -= dt;
+            if (turnTimer <= 0) { turnRate = (rnd.NextDouble() * 2 - 1) * 2.4; turnTimer = 0.5 + rnd.NextDouble(); }
+            heading += turnRate * dt;
+            dirX = Math.Cos(heading); dirY = Math.Sin(heading);
+        }
+        else
+        {
+            changeTimer -= dt;
+            if (changeTimer <= 0) NewDirection();
+        }
+
+        double spd = ballSpeed * speedMul;
+        bvx = dirX * spd; bvy = dirY * spd * vScale;
+        bx += bvx * dt; by += bvy * dt;
+
+        double top = arena.Top + br + (game.Jumps ? JumpH() : 0), bottom = arena.Bottom - br;
+        if (top > bottom) top = bottom;
+        if (bx < arena.Left + br) { bx = arena.Left + br; dirX = Math.Abs(dirX); heading = Math.Atan2(dirY, dirX); }
+        if (bx > arena.Right - br) { bx = arena.Right - br; dirX = -Math.Abs(dirX); heading = Math.Atan2(dirY, dirX); }
+        if (by < top) { by = top; dirY = Math.Abs(dirY); heading = Math.Atan2(dirY, dirX); }
+        if (by > bottom) { by = bottom; dirY = -Math.Abs(dirY); heading = Math.Atan2(dirY, dirX); }
+
+        if (game.Jumps && playDiff >= 1)
+        {
+            jumpTimer -= dt;
+            if (jumpTimer <= 0 && jumpOff == 0 && jumpV == 0) { jumpV = -Math.Sqrt(2 * G * JumpH()); jumpTimer = 1.0 + rnd.NextDouble() * 2.0; }
+            if (jumpV != 0 || jumpOff < 0)
+            {
+                jumpV += G * dt;
+                jumpOff += jumpV * dt;
+                if (jumpOff >= 0) { jumpOff = 0; jumpV = 0; }
+            }
+        }
+        bvy += jumpV;
+    }
+
+    void NewDirection()
+    {
+        if (rnd.NextDouble() < game.HorizBias) { dirX = dirX >= 0 ? -1 : 1; dirY = (rnd.NextDouble() * 2 - 1) * 0.5; }
+        else { double a = rnd.NextDouble() * Math.PI * 2; dirX = Math.Cos(a); dirY = Math.Sin(a); }
+        double n = Math.Sqrt(dirX * dirX + dirY * dirY);
+        dirX /= n; dirY /= n;
+        heading = Math.Atan2(dirY, dirX);
+        if (playDiff == 1) { changeTimer = 0.7 + rnd.NextDouble() * 0.9; speedMul = 1; }
+        else if (playDiff == 2) { changeTimer = 0.3 + rnd.NextDouble() * 0.6; speedMul = 0.85 + rnd.NextDouble() * 0.3; }
+        else { changeTimer = 0.15 + rnd.NextDouble() * 0.4; speedMul = 0.6 + rnd.NextDouble() * 1.3; }
+    }
+
+    // ---------- flick ----------
+    void SpawnTarget(double now)
+    {
+        float H = ClientSize.Height;
+        tr = FlickR[playDiff] * H * game.SizeMul;
+        bool ok = false;
+        for (int i = 0; i < 40 && !ok; i++)
+        {
+            double d = (FlickMin[playDiff] + rnd.NextDouble() * (FlickMax[playDiff] - FlickMin[playDiff])) * H;
+            double a = rnd.NextDouble() * Math.PI * 2;
+            tx = cx + Math.Cos(a) * d; ty = cy + Math.Sin(a) * d;
+            ok = tx > arena.Left + tr && tx < arena.Right - tr && ty > arena.Top + tr && ty < arena.Bottom - tr;
+        }
+        if (!ok)
+        {
+            tx = arena.Left + tr + rnd.NextDouble() * (arena.Width - 2 * tr);
+            ty = arena.Top + tr + rnd.NextDouble() * (arena.Height - 2 * tr);
+        }
+        startX = cx; startY = cy;
+        flickD = Math.Sqrt((tx - cx) * (tx - cx) + (ty - cy) * (ty - cy));
+        ux = flickD > 0 ? (tx - cx) / flickD : 0; uy = flickD > 0 ? (ty - cy) / flickD : 0;
+        primaryDone = flickD < 1;
+        smoothSpd = peakSpd = 0;
+        spawnT = now;
+    }
+
+    void StepFlick(double dt, double now, double moved)
+    {
+        if (!primaryDone)
+        {
+            // The first big movement ends when speed falls to 15% of its peak; where it stopped shows over/undershoot.
+            smoothSpd += (moved / dt - smoothSpd) * Math.Min(1, dt / 0.025);
+            if (smoothSpd > peakSpd) peakSpd = smoothSpd;
+            double along = (cx - startX) * ux + (cy - startY) * uy;
+            if (along > 0.3 * flickD && peakSpd > 0 && smoothSpd < 0.15 * peakSpd)
+            {
+                primaryDone = true;
+                if (flickD > 3 * tr) progress.Add(along / flickD);
+            }
+        }
+        double timeout = FlickTimeout[playDiff];
+        if (timeout > 0 && now - spawnT > timeout) { expired++; SpawnTarget(now); }
+    }
+
+    void FlickClick(double now)
+    {
+        if (Hit(cx - tx, cy - ty, tr))
+        {
+            hits++;
+            hitTimes.Add(now - spawnT);
+            if (!primaryDone && flickD > 3 * tr) progress.Add(((cx - startX) * ux + (cy - startY) * uy) / flickD);
+            SpawnTarget(now);
+        }
+        else misses++;
+    }
+
+    // ---------- bots ----------
+    void SpawnBot(double now)
+    {
+        double H = ClientSize.Height;
+        double[] scales = { 1.0, 0.75, 0.55 };   // smaller bots stand further back, higher on screen
+        double sc = scales[rnd.Next(3)];
+        var b = new Bot { U = BotU[playDiff] * H * sc, Hp = 3, SpawnT = now };
+        b.Ground = arena.Top + arena.Height * (0.55 + 0.45 * (sc - 0.55) / 0.45);
+        b.Strafe = rnd.NextDouble() < BotStrafeShare[playDiff];
+        for (int i = 0; i < 25; i++)
+        {
+            b.X = arena.Left + b.U + rnd.NextDouble() * (arena.Width - 2 * b.U);
+            bool clear = true;
+            foreach (var o in bots)
+                if (!o.Dead && Math.Abs(o.X - b.X) < (o.U + b.U) * 1.2 && Math.Abs(o.Ground - b.Ground) < 2.6 * Math.Max(o.U, b.U)) clear = false;
+            if (clear) break;
+        }
+        b.Origin = b.X;
+        b.Range = b.U * (2 + rnd.NextDouble() * 3);
+        b.Speed = BotSpeed[playDiff] * b.U;
+        b.Vx = (rnd.Next(2) == 0 ? -1 : 1) * b.Speed;
+        b.DirTimer = BotDirTime();
+        bots.Add(b);
+    }
+
+    double BotDirTime()
+    {
+        double[] lo = { 0.8, 0.5, 0.3, 0.15 }, hi = { 1.8, 1.4, 1.0, 0.6 };
+        return lo[playDiff] + rnd.NextDouble() * (hi[playDiff] - lo[playDiff]);
+    }
+
+    void StepBots(double dt, double now, double moved)
+    {
+        for (int i = bots.Count - 1; i >= 0; i--)
+        {
+            var b = bots[i];
+            if (b.Dead)
+            {
+                b.DeadT -= dt;
+                if (b.DeadT <= 0) { bots.RemoveAt(i); SpawnBot(now); }
+                continue;
+            }
+            b.Flash = Math.Max(0, b.Flash - dt);
+            if (!b.Strafe) continue;
+            b.DirTimer -= dt;
+            double nx = b.X + b.Vx * dt;
+            bool hitEdge = nx < arena.Left + b.U || nx > arena.Right - b.U;
+            if (b.DirTimer <= 0 || Math.Abs(nx - b.Origin) > b.Range || hitEdge)
+            {
+                double speed = playDiff == 3 ? b.Speed * (0.7 + rnd.NextDouble() * 0.7) : b.Speed;
+                b.Vx = (b.Vx > 0 ? -1 : 1) * speed;
+                b.DirTimer = BotDirTime();
+                if (hitEdge) b.Origin = Math.Max(arena.Left + b.U + b.Range, Math.Min(arena.Right - b.U - b.Range, b.Origin));
+            }
+            else b.X = nx;
+        }
+        if (path.Count < 3000) path.Add(new[] { cx, cy, moved / dt });
+        hitMarkT = Math.Max(0, hitMarkT - dt);
+    }
+
+    // 0 = miss, 1 = body, 2 = head
+    static int BotPart(Bot b, double px, double py)
+    {
+        double u = b.U, bodyTop = b.Ground - 1.9 * u, headR = 0.31 * u, headCy = bodyTop - 0.08 * u - headR, r = u / 2;
+        if ((px - b.X) * (px - b.X) + (py - headCy) * (py - headCy) <= headR * headR) return 2;
+        if (Math.Abs(px - b.X) <= r && py >= bodyTop + r && py <= b.Ground - r) return 1;
+        double dTop = (px - b.X) * (px - b.X) + (py - bodyTop - r) * (py - bodyTop - r);
+        double dBot = (px - b.X) * (px - b.X) + (py - b.Ground + r) * (py - b.Ground + r);
+        return dTop <= r * r || dBot <= r * r ? 1 : 0;
+    }
+
+    void BotClick(double now)
+    {
+        shots++;
+        foreach (var b in bots.Where(x => !x.Dead).OrderByDescending(x => x.U))
+        {
+            int part = BotPart(b, cx, cy);
+            if (part == 0) continue;
+            botHits++;
+            if (part == 2) headHits++;
+            if (pathFresh) { AnalyzePath(cx, cy); pathFresh = false; }
+            b.Hp -= part == 2 ? 3 : 1;
+            b.Flash = 0.08;
+            hitMarkT = 0.12; hitMarkHead = part == 2;
+            if (b.Hp <= 0)
+            {
+                b.Dead = true; b.DeadT = 0.25;
+                kills++;
+                if (part == 2) headKills++;
+                ttk.Add(now - b.SpawnT);
+                StartPath();
+            }
+            return;
+        }
+    }
+
+    void StartPath() { path.Clear(); pathStartX = cx; pathStartY = cy; pathFresh = true; }
+
+    // Where did the first big mouse movement toward the next target stop? Same idea as flick mode.
+    void AnalyzePath(double tx2, double ty2)
+    {
+        double D = Math.Sqrt((tx2 - pathStartX) * (tx2 - pathStartX) + (ty2 - pathStartY) * (ty2 - pathStartY));
+        if (D < ClientSize.Height * 0.05 || path.Count < 3) return;
+        double ux2 = (tx2 - pathStartX) / D, uy2 = (ty2 - pathStartY) / D;
+        var smooth = new double[path.Count];
+        double s = 0, peak = 0;
+        for (int i = 0; i < path.Count; i++) { s += (path[i][2] - s) * 0.3; smooth[i] = s; if (s > peak) peak = s; }
+        if (peak <= 0) return;
+        double along = 0;
+        for (int i = 0; i < path.Count; i++)
+        {
+            along = (path[i][0] - pathStartX) * ux2 + (path[i][1] - pathStartY) * uy2;
+            if (along > 0.3 * D && smooth[i] < 0.15 * peak) { progress.Add(along / D); return; }
+        }
+        progress.Add(along / D);
+    }
+
+    // ---------- reaction ----------
+    void ReactionClick(double now)
+    {
+        if (rState == 2)
+        {
+            lastReaction = (now - greenShown) * 1000;
+            rTimes.Add(lastReaction);
+            rState = 3;
+            if (rTimes.Count >= 5) FinishReaction();
+        }
+        else if (rState == 1) rState = 4;
+        else { rState = 1; greenAt = now + 1.2 + rnd.NextDouble() * 3.0; }
+        Invalidate();
+    }
+
+    // ---------- results ----------
+    void RoundOver()
+    {
+        if (playMode == FND)
+        {
+            fScores[fIdx] = totTime > 0 ? onTime / totTime * 100 : 0;
+            fIdx++;
+            if (fIdx < 5)
+            {
+                mult = fMults[fIdx];
+                pxPerCount = PxPerCount(mult);
+                ResetBall();
+                ResetTrackStats();
+                timeLeft = roundLen;
+                countdown = 2;
+                return;
+            }
+            FinishFinder();
+        }
+        else if (playMode == FLK) FinishFlick();
+        else if (playMode == BOT) FinishBots();
+        else FinishTracking();
+    }
+
+    void ShowResults()
+    {
+        copyNote = "";
+        UnlockMouse();
+        scr = Scr.Results;
+        Invalidate();
+    }
+
+    void Suggest(double m)
+    {
+        sugSens = double.NaN;
+        if (m == 1) return;
+        double cur = Sens(game), ns = game.Round(game.SensFor(game.DegPerCount(cur) * m));
+        if (ns > 0 && ns != game.Round(cur)) sugSens = ns;
+    }
+
+    static double Clamp(double v, double lo, double hi) { return Math.Max(lo, Math.Min(hi, v)); }
+
+    void FinishTracking()
+    {
+        double pct = totTime > 0 ? onTime / totTime * 100 : 0;
+        var hist = History(TRK, playDiff);
+        resPB = SaveRec(TRK, playDiff, pct, false);
+        scoreCode = MakeCode("T", playDiff, pct.ToString("0.0", CultureInfo.InvariantCulture));
+        resTitle = game.Name + "  ·  Tracking  ·  " + DiffNames[playDiff];
+        resMain = pct.ToString("0.0") + "%";
+        resLabel = "of the time on target";
+        resLines = new List<string>();
+        if (hist.Count > 0) resLines.Add("Previous best: " + hist.Max(r => r.Score).ToString("0.0") + "%");
+        resLines.Add("Rounds played at this difficulty: " + (hist.Count + 1));
+        showCoach = true;
+        coachHead = "SENSITIVITY COACH";
+        double m = 1;
+        if (leadTime < 3)
+            coachText = "Not enough close tracking this round to judge your sensitivity. Try to stay on the ball, or drop the difficulty a level.";
+        else
+        {
+            double ratio = ballPath > 0 ? crossPath / ballPath : 1, lead = leadSum / leadTime;
+            if (ratio > 1.35)
+            {
+                m = 1 - Clamp((ratio - 1.2) * 0.5, 0.05, 0.2);
+                coachText = string.Format("Your crosshair travelled {0:0.0}x as far as the ball did. All those small over-corrections usually mean your sensitivity is a bit high.", ratio);
+            }
+            else if (lead < -1.0 && ratio < 1.15)
+            {
+                m = 1 + Clamp((-lead - 0.8) * 0.15, 0.05, 0.2);
+                coachText = string.Format("You were usually trailing about {0:0.0} ball-widths behind the ball. That usually means your sensitivity is a bit low, so it's hard to keep up when it changes direction.", -lead / 2);
+            }
+            else coachText = "Your tracking looks balanced: you're not over-correcting and not falling behind. Your sensitivity suits you here.";
+        }
+        Suggest(m);
+        ShowResults();
+    }
+
+    void FinishFlick()
+    {
+        int shots = hits + misses;
+        double acc = shots > 0 ? hits * 100.0 / shots : 0;
+        var hist = History(FLK, playDiff);
+        resPB = SaveRec(FLK, playDiff, hits, false);
+        scoreCode = MakeCode("F", playDiff, hits.ToString(CultureInfo.InvariantCulture));
+        resTitle = game.Name + "  ·  Flick  ·  " + DiffNames[playDiff];
+        resMain = hits.ToString();
+        resLabel = "targets hit in 30 seconds";
+        resLines = new List<string>();
+        resLines.Add(string.Format("Accuracy: {0:0}%  ({1} missed clicks)", acc, misses));
+        if (hitTimes.Count > 0) resLines.Add(string.Format("Average time per target: {0:0} ms", hitTimes.Average() * 1000));
+        if (expired > 0) resLines.Add(expired + " targets vanished before you hit them");
+        if (hist.Count > 0) resLines.Add("Previous best: " + hist.Max(r => r.Score).ToString("0") + " hits");
+        showCoach = true;
+        coachHead = "SENSITIVITY COACH";
+        FlickCoach("Not enough flicks this round to judge your sensitivity. Hit at least 6 targets.");
+        ShowResults();
+    }
+
+    void FlickCoach(string notEnough)
+    {
+        double m = 1;
+        if (progress.Count < 6) coachText = notEnough;
+        else
+        {
+            double avg = progress.Average();
+            int over = progress.Count(p => p > 1.05) * 100 / progress.Count;
+            if (avg > 1.06)
+            {
+                m = 1 - Clamp((avg - 1) * 0.7, 0.05, 0.2);
+                coachText = string.Format("Your first flick landed at {0:0}% of the distance on average, so you tend to fly past the target ({1}% of flicks). That usually means your sensitivity is a bit high.", avg * 100, over);
+            }
+            else if (avg < 0.86)
+            {
+                m = 1 + Clamp((1 - avg) * 0.6, 0.05, 0.2);
+                coachText = string.Format("Your first flick landed at {0:0}% of the distance on average, so you usually stop short and need a second correction. That usually means your sensitivity is a bit low.", avg * 100);
+            }
+            else coachText = string.Format("Your first flick landed at {0:0}% of the distance on average, which is close to ideal. Your sensitivity looks right for flicking.", avg * 100);
+        }
+        Suggest(m);
+    }
+
+    void FinishBots()
+    {
+        var ci = CultureInfo.InvariantCulture;
+        double acc = shots > 0 ? botHits * 100.0 / shots : 0, hs = botHits > 0 ? headHits * 100.0 / botHits : 0;
+        var hist = History(BOT, playDiff);
+        resPB = SaveRec(BOT, playDiff, kills, false);
+        scoreCode = MakeCode("B", playDiff, kills.ToString(ci));
+        resTitle = game.Name + "  ·  Bots  ·  " + DiffNames[playDiff];
+        resMain = kills.ToString();
+        resLabel = "bots eliminated in 30 seconds";
+        resLines = new List<string>();
+        resLines.Add(string.Format("Headshots: {0:0}% of hits  ({1} headshot kills)", hs, headKills));
+        resLines.Add(string.Format("Accuracy: {0:0}%  ({1} shots)", acc, shots));
+        if (ttk.Count > 0) resLines.Add(string.Format("Average time to kill: {0:0} ms", ttk.Average() * 1000));
+        if (hist.Count > 0) resLines.Add("Previous best: " + hist.Max(r => r.Score).ToString("0") + " kills");
+        showCoach = true;
+        coachHead = "SENSITIVITY COACH";
+        FlickCoach("Not enough kills this round to judge your sensitivity. Get at least 7 kills.");
+        ShowResults();
+    }
+
+    void FinishReaction()
+    {
+        double avg = rTimes.Average(), best = rTimes.Min();
+        var hist = History(RCT, 0);
+        resPB = SaveRec(RCT, 0, avg, true);
+        scoreCode = MakeCode("R", 0, avg.ToString("0", CultureInfo.InvariantCulture));
+        resTitle = game.Name + "  ·  Reaction test";
+        resMain = avg.ToString("0") + " ms";
+        resLabel = "average over 5 tries";
+        resLines = new List<string>();
+        resLines.Add("Fastest: " + best.ToString("0") + " ms");
+        resLines.Add("Tries: " + string.Join("  ·  ", rTimes.Select(t => t.ToString("0")).ToArray()) + " ms");
+        if (hist.Count > 0) resLines.Add("Previous best average: " + hist.Min(r => r.Score).ToString("0") + " ms");
+        showCoach = true;
+        coachHead = "HOW YOU DID";
+        string rating = avg < 170 ? "Outstanding. That's pro-level reaction speed."
+            : avg < 210 ? "Great. Faster than most players."
+            : avg < 250 ? "Good. Right around the typical gamer range."
+            : avg < 300 ? "Average. Most people land around 200 to 280 ms."
+            : "A bit slow this time. Being tired or a laggy screen adds time, so try again later.";
+        coachText = rating + " These times include your mouse and monitor delay, so they run a little higher than in-game feel.";
+        sugSens = double.NaN;
+        ShowResults();
+    }
+
+    void FinishFinder()
+    {
+        var order = Enumerable.Range(0, 5).OrderBy(i => fMults[i]).ToArray();
+        double[] ms = order.Select(i => fMults[i]).ToArray(), sc = order.Select(i => fScores[i]).ToArray();
+        int k = Array.IndexOf(sc, sc.Max());
+        double best = ms[k];
+        if (k > 0 && k < 4)
+        {
+            // Fit a curve through the best score and its neighbours to land between the tested values.
+            double den = sc[k + 1] - 2 * sc[k] + sc[k - 1];
+            if (den < 0) best = ms[k] - 0.5 * 0.1 * (sc[k + 1] - sc[k - 1]) / den;
+            best = Clamp(best, ms[k] - 0.1, ms[k] + 0.1);
+        }
+        fMults = ms; fScores = sc;
+        double spread = sc.Max() - sc.Min();
+        resTitle = game.Name + "  ·  Sens finder";
+        scoreCode = "";
+        resLines = new List<string>();
+        resLabel = "the sensitivity you tracked best with";
+        showCoach = true;
+        coachHead = "SENSITIVITY COACH";
+        if (spread < 3)
+        {
+            resMain = game.Fmt(Sens(game));
+            coachText = "Your scores were within 3% of each other at every sensitivity, so your current sens is fine. Pick whatever feels most comfortable.";
+            sugSens = double.NaN;
+        }
+        else
+        {
+            Suggest(best);
+            resMain = double.IsNaN(sugSens) ? game.Fmt(Sens(game)) : game.Fmt(sugSens);
+            coachText = string.Format("You scored {0:0}% at best and {1:0}% at worst across the five rounds.", sc.Max(), sc.Min())
+                + (k == 0 || k == 4 ? " Your best round was at the edge of the range tested, so switch to this sens and run the finder again to fine-tune it." : " The chart shows how you did at each sensitivity.");
+        }
+        resPB = false;
+        ShowResults();
+    }
+
+    void ApplySuggestion()
+    {
+        if (double.IsNaN(sugSens)) return;
+        settings[game.Id] = new[] { sugSens, Dpi(game) };
+        Save();
+        sugApplied = true;
+    }
+
+    // ---------- drawing helpers ----------
+    float P(float v) { return v * S; }
+
+    static Color Blend(Color a, Color b, double t)
+    {
+        return Color.FromArgb((int)(a.R + (b.R - a.R) * t), (int)(a.G + (b.G - a.G) * t), (int)(a.B + (b.B - a.B) * t));
+    }
+
+    static Color OnColor(Color c)
+    {
+        return (0.299 * c.R + 0.587 * c.G + 0.114 * c.B) / 255 > 0.62 ? Color.FromArgb(20, 20, 22) : Color.White;
+    }
+
+    static GraphicsPath Round(RectangleF r, float rad)
+    {
+        var p = new GraphicsPath();
+        float d = Math.Min(rad * 2, Math.Min(r.Width, r.Height));
+        if (d <= 0) { p.AddRectangle(r); return p; }
+        p.AddArc(r.X, r.Y, d, d, 180, 90);
+        p.AddArc(r.Right - d, r.Y, d, d, 270, 90);
+        p.AddArc(r.Right - d, r.Bottom - d, d, d, 0, 90);
+        p.AddArc(r.X, r.Bottom - d, d, d, 90, 90);
+        p.CloseFigure();
+        return p;
+    }
+
+    static void FillRound(Graphics g, Color c, RectangleF r, float rad)
+    {
+        using (var p = Round(r, rad)) using (var b = new SolidBrush(c)) g.FillPath(b, p);
+    }
+
+    static void DrawRound(Graphics g, Color c, RectangleF r, float rad, float w)
+    {
+        using (var p = Round(r, rad)) using (var pen = new Pen(c, w)) g.DrawPath(pen, p);
+    }
+
+    static void DrawT(Graphics g, string s, Font f, Color c, float x, float y)
+    {
+        using (var b = new SolidBrush(c)) g.DrawString(s, f, b, x, y);
+    }
+
+    static void DrawTC(Graphics g, string s, Font f, Color c, RectangleF r)
+    {
+        using (var b = new SolidBrush(c))
+        using (var sf = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center })
+            g.DrawString(s, f, b, r, sf);
+    }
+
+    static void DrawTW(Graphics g, string s, Font f, Color c, RectangleF r)
+    {
+        using (var b = new SolidBrush(c)) g.DrawString(s, f, b, r);
+    }
+
+    Color Accent { get { return game != null ? game.Accent : Color.FromArgb(60, 196, 176); } }
+
+    void AddHit(RectangleF r, Action a) { btns.Add(new Btn { R = r, Click = a }); }
+
+    void AddBtn(Graphics g, RectangleF r, string text, Action a, bool primary, bool selected)
+    {
+        bool hover = r.Contains(mouse);
+        Color fill = primary || selected ? Accent : (hover ? PanelHi : Panel);
+        if ((primary || selected) && hover) fill = Blend(fill, Color.White, 0.12);
+        FillRound(g, fill, r, P(8));
+        if (!primary && !selected) DrawRound(g, hover ? Blend(Line, Accent, 0.6) : Line, r, P(8), 1);
+        DrawTC(g, text, fBtn, primary || selected ? OnColor(fill) : TextC, r);
+        AddHit(r, a);
+    }
+
+    // ---------- painting ----------
+    protected override void OnPaint(PaintEventArgs e)
+    {
+        var g = e.Graphics;
+        g.SmoothingMode = SmoothingMode.AntiAlias;
+        g.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
+        btns.Clear();
+        if (scr == Scr.Setup) PaintSetup(g);
+        else if (scr == Scr.Home) PaintHome(g);
+        else if (scr == Scr.Game) PaintGame(g);
+        else if (scr == Scr.Play) PaintPlay(g);
+        else PaintResults(g);
+    }
+
+    void PaintSetup(Graphics g)
+    {
+        float W = ClientSize.Width, H = ClientSize.Height;
+        g.Clear(UiBg);
+        bool first = playerName == "";
+        float pw = P(540), ph = P(480);
+        var r = new RectangleF((W - pw) / 2, (H - ph) / 2, pw, ph);
+        FillRound(g, Panel, r, P(14));
+        float x = r.X + P(32), y = r.Y, w = pw - P(64);
+        DrawT(g, first ? "WELCOME TO AIM TRAINER" : "YOUR PROFILE", fLabel, Accent, x, y + P(30));
+        DrawT(g, first ? "Let's set you up" : "Edit your profile", fH2, TextC, x - P(2), y + P(52));
+        DrawT(g, "Player name", fSmall, TextC, x, y + P(108));
+        Place(nameBox, x, y + P(132), w);
+        DrawTW(g, "Shown on the leaderboard next to your scores. Letters, numbers, spaces, _ and - only.", fSmall, Muted, new RectangleF(x, y + P(178), w, P(40)));
+        DrawT(g, "Mouse DPI", fSmall, TextC, x, y + P(226));
+        Place(setupDpiBox, x, y + P(250), P(160));
+        DrawTW(g, "Find it in your mouse software (G Hub, Synapse, SteelSeries GG). Most gaming mice are 800 or 1600. You can set a different DPI for a single game later.",
+            fSmall, Muted, new RectangleF(x, y + P(296), w, P(50)));
+        if (setupError != "") DrawT(g, setupError, fSmall, Color.FromArgb(255, 107, 107), x, y + P(352));
+        AddBtn(g, new RectangleF(x, r.Bottom - P(80), P(180), P(48)), first ? "Continue" : "Save", FinishSetup, true, false);
+        if (!first) AddBtn(g, new RectangleF(x + P(196), r.Bottom - P(80), P(140), P(48)), "Cancel", LeaveSetup, false, false);
+    }
+
+    void PaintHome(Graphics g)
+    {
+        float W = ClientSize.Width, H = ClientSize.Height, m = P(48);
+        g.Clear(UiBg);
+        DrawT(g, "AIM TRAINER", fTitle, TextC, m, m);
+        DrawT(g, "Playing as " + playerName + "  ·  " + globalDpi + " DPI.  Pick the game you want to practise for.", fBody, Muted, m + 2, m + P(56));
+        AddBtn(g, new RectangleF(W - m - P(100), m, P(100), P(40)), "Exit", Close, false, false);
+        AddBtn(g, new RectangleF(W - m - P(270), m, P(160), P(40)), "Leaderboard ↗", OpenLeaderboard, false, false);
+        AddBtn(g, new RectangleF(W - m - P(420), m, P(140), P(40)), "Edit profile", GoSetup, false, false);
+
+        float bannerY = m + P(100);
+        if (updState != "" && updState != "later")
+        {
+            var r = new RectangleF(m, bannerY, W - 2 * m, P(58));
+            FillRound(g, Blend(Panel, Accent, 0.22), r, P(10));
+            DrawRound(g, Accent, r, P(10), 1);
+            string msg = updState == "downloading" ? "Downloading update v" + updVersion + "…  The app restarts by itself when it's done."
+                : updState == "error" ? "Couldn't update automatically. Download v" + updVersion + " from the GitHub page instead."
+                : "Update available: v" + updVersion + (updNotes != "" ? "  ·  " + updNotes : "");
+            DrawTW(g, msg, fBody, TextC, new RectangleF(r.X + P(20), r.Y + P(17), r.Width - P(360), P(26)));
+            if (updState == "available")
+            {
+                AddBtn(g, new RectangleF(r.Right - P(310), r.Y + P(10), P(170), P(38)), "Update now", DoUpdate, true, false);
+                AddBtn(g, new RectangleF(r.Right - P(130), r.Y + P(10), P(110), P(38)), "Later", () => updState = "later", false, false);
+            }
+            else if (updState == "error")
+                AddBtn(g, new RectangleF(r.Right - P(250), r.Y + P(10), P(230), P(38)), "Open download page ↗", OpenReleases, false, false);
+            bannerY += P(70);
+        }
+        if (newsText != "")
+        {
+            var r = new RectangleF(m, bannerY, W - 2 * m, P(58));
+            FillRound(g, Panel, r, P(10));
+            DrawRound(g, Line, r, P(10), 1);
+            DrawT(g, "NEWS", fLabel, Accent, r.X + P(20), r.Y + P(20));
+            DrawTW(g, newsText, fBody, TextC, new RectangleF(r.X + P(80), r.Y + P(17), r.Width - P(230), P(26)));
+            AddBtn(g, new RectangleF(r.Right - P(130), r.Y + P(10), P(110), P(38)), "Got it", DismissNews, false, false);
+            bannerY += P(70);
+        }
+        DrawT(g, "v" + AppVersion, fSmall, Muted, W - m - P(40), H - m);
+
+        int cols = W > P(1250) ? 4 : (W > P(850) ? 3 : 2);
+        float gap = P(18), top = bannerY + P(16), tw = (W - 2 * m - (cols - 1) * gap) / cols, th = P(150);
+        for (int i = 0; i < games.Count; i++)
+        {
+            var gi = games[i];
+            var r = new RectangleF(m + (i % cols) * (tw + gap), top + (i / cols) * (th + gap), tw, th);
+            bool hover = r.Contains(mouse);
+            FillRound(g, hover ? Blend(gi.Bg, gi.Accent, 0.16) : Blend(gi.Bg, Color.White, 0.03), r, P(12));
+            DrawRound(g, hover ? gi.Accent : Line, r, P(12), hover ? 2 : 1);
+            FillRound(g, gi.Accent, new RectangleF(r.X + P(20), r.Y + P(22), P(28), P(5)), P(2));
+            DrawT(g, gi.Name, fH2, TextC, r.X + P(18), r.Y + P(36));
+            DrawT(g, gi.Tagline, fSmall, Muted, r.X + P(20), r.Y + P(72));
+            string sens = settings.ContainsKey(gi.Id) ? "Sens " + gi.Fmt(Sens(gi)) + "  ·  " + Dpi(gi) + " DPI" : "Sens not set yet";
+            DrawT(g, sens, fSmall, settings.ContainsKey(gi.Id) ? gi.Accent : Muted, r.X + P(20), r.Bottom - P(36));
+            var cap = gi;
+            AddHit(r, () => GoGame(cap));
+        }
+        DrawT(g, "Everything uses your real mouse movement, so set your in-game sensitivity on the next screen.", fSmall, Muted, m + 2, H - m);
+    }
+
+    void PaintGame(Graphics g)
+    {
+        float W = ClientSize.Width, H = ClientSize.Height, m = P(40);
+        g.Clear(UiBg);
+        AddBtn(g, new RectangleF(m, m, P(100), P(38)), "‹  Back", GoHome, false, false);
+        DrawT(g, game.Name.ToUpper(), fTitle, game.Accent, m - P(2), m + P(54));
+        DrawT(g, game.Tagline, fBody, Muted, m + 1, m + P(106));
+        float top = m + P(156);
+
+        // settings
+        var sp = new RectangleF(m, top, P(330), P(340));
+        FillRound(g, Panel, sp, P(12));
+        DrawT(g, "YOUR SETTINGS", fLabel, Muted, sp.X + P(20), sp.Y + P(18));
+        DrawT(g, "In-game sensitivity" + (game.Suffix != "" ? " (" + game.Suffix + ")" : ""), fSmall, TextC, sp.X + P(20), sp.Y + P(48));
+        Place(sensBox, sp.X + P(20), sp.Y + P(72), P(160));
+        DrawT(g, "Mouse DPI" + (Dpi(game) == globalDpi ? " (from your profile)" : " (this game only)"), fSmall, TextC, sp.X + P(20), sp.Y + P(126));
+        Place(dpiBox, sp.X + P(20), sp.Y + P(150), P(160));
+        double cm = 360.0 / (game.DegPerCount(Sens(game)) * Dpi(game)) * 2.54;
+        DrawT(g, cm.ToString("0.0") + " cm", fH2, game.Accent, sp.X + P(18), sp.Y + P(206));
+        DrawT(g, "of mouse movement for a full 360° turn", fSmall, Muted, sp.X + P(20), sp.Y + P(238));
+        if (game.Note != "") DrawTW(g, game.Note, fSmall, Muted, new RectangleF(sp.X + P(20), sp.Y + P(268), sp.Width - P(40), P(60)));
+
+        // modes
+        float x2 = sp.Right + P(28), w2 = W - x2 - m;
+        DrawT(g, "MODE", fLabel, Muted, x2, top);
+        string[] modes = { TRK, FLK, BOT, RCT, FND };
+        string[] desc = {
+            "Keep your crosshair on a moving ball. Score is the % of time on target.",
+            "Snap to targets as they pop up and click. 30 seconds.",
+            "Strafing and standing bots with 3 HP. Headshots kill instantly.",
+            "Click the moment the screen turns green. 5 tries.",
+            "5 short tracking rounds at hidden sens values. Finds the one you aim best with." };
+        float gap = P(14), cw = (w2 - 4 * gap) / 5, ch = P(140);
+        for (int i = 0; i < 5; i++)
+        {
+            var r = new RectangleF(x2 + i * (cw + gap), top + P(26), cw, ch);
+            bool sel = mode == modes[i], hover = r.Contains(mouse);
+            FillRound(g, sel ? Blend(Panel, game.Accent, 0.18) : (hover ? PanelHi : Panel), r, P(12));
+            if (sel) DrawRound(g, game.Accent, r, P(12), 2);
+            DrawT(g, modes[i], fH3, sel ? game.Accent : TextC, r.X + P(16), r.Y + P(14));
+            DrawTW(g, desc[i], fSmall, Muted, new RectangleF(r.X + P(16), r.Y + P(46), r.Width - P(28), r.Height - P(50)));
+            var mi = modes[i];
+            AddHit(r, () => mode = mi);
+        }
+        float y = top + P(26) + ch + P(26);
+        if (mode == TRK || mode == FLK || mode == BOT)
+        {
+            DrawT(g, "DIFFICULTY", fLabel, Muted, x2, y);
+            for (int i = 0; i < 4; i++)
+            {
+                int di = i;
+                AddBtn(g, new RectangleF(x2 + i * P(120), y + P(24), P(110), P(40)), DiffNames[i], () => diff = di, false, diff == i);
+            }
+            y += P(24) + P(40) + P(26);
+        }
+        AddBtn(g, new RectangleF(x2, y, P(220), P(54)), "Start   (Space)", () => StartPlay(mode), true, false);
+        y += P(54) + P(30);
+
+        // progress
+        var pr = new RectangleF(x2, y, w2, Math.Max(P(170), H - y - m));
+        FillRound(g, Panel, pr, P(12));
+        if (mode == FND)
+        {
+            DrawT(g, "HOW THE SENS FINDER WORKS", fLabel, Muted, pr.X + P(20), pr.Y + P(18));
+            DrawTW(g, "You play 5 tracking rounds of 10 seconds each. Each round secretly uses a different sensitivity, from 80% to 120% of yours, in a random order. "
+                + "At the end you see which one you tracked best with, converted to a " + game.Name + " sens number.",
+                fBody, TextC, new RectangleF(pr.X + P(20), pr.Y + P(46), Math.Min(pr.Width - P(40), P(700)), pr.Height - P(60)));
+            return;
+        }
+        var hist = History(mode, diff);
+        bool lower = mode == RCT;
+        DrawT(g, "YOUR PROGRESS  ·  " + mode.ToUpper() + (mode == RCT ? "" : "  ·  " + DiffNames[diff].ToUpper()), fLabel, Muted, pr.X + P(20), pr.Y + P(18));
+        if (hist.Count == 0)
+        {
+            DrawT(g, "No rounds yet. Your scores will show up here.", fBody, Muted, pr.X + P(20), pr.Y + P(50));
+            return;
+        }
+        double best = lower ? hist.Min(r => r.Score) : hist.Max(r => r.Score);
+        DrawT(g, "Best  " + FmtScore(mode, best) + "      Last  " + FmtScore(mode, hist.Last().Score) + "      Rounds  " + hist.Count, fH3, TextC, pr.X + P(20), pr.Y + P(44));
+        var chart = new RectangleF(pr.X + P(60), pr.Y + P(90), pr.Width - P(90), pr.Height - P(120));
+        if (chart.Height > P(50)) DrawChart(g, chart, hist.Skip(Math.Max(0, hist.Count - 20)).Select(r => r.Score).ToList(), mode);
+    }
+
+    static string FmtScore(string m, double v)
+    {
+        if (m == TRK) return v.ToString("0.0") + "%";
+        if (m == FLK) return v.ToString("0") + " hits";
+        if (m == BOT) return v.ToString("0") + " kills";
+        return v.ToString("0") + " ms";
+    }
+
+    void DrawChart(Graphics g, RectangleF r, List<double> vals, string m)
+    {
+        double lo = vals.Min(), hi = vals.Max();
+        double pad = Math.Max((hi - lo) * 0.15, m == TRK ? 2 : (m == FLK ? 1 : 10));
+        lo -= pad; hi += pad;
+        using (var gridPen = new Pen(Line, 1))
+        {
+            for (int i = 0; i <= 2; i++)
+            {
+                float y = r.Bottom - r.Height * i / 2f;
+                g.DrawLine(gridPen, r.X, y, r.Right, y);
+                DrawT(g, FmtScore(m, lo + (hi - lo) * i / 2).Replace(" hits", "").Replace(" kills", "").Replace(" ms", ""), fSmall, Muted, r.X - P(52), y - P(9));
+            }
+        }
+        var pts = new PointF[vals.Count];
+        for (int i = 0; i < vals.Count; i++)
+        {
+            float x = vals.Count == 1 ? r.X + r.Width / 2 : r.X + r.Width * i / (vals.Count - 1);
+            pts[i] = new PointF(x, (float)(r.Bottom - (vals[i] - lo) / (hi - lo) * r.Height));
+        }
+        if (pts.Length > 1)
+        {
+            var area = new List<PointF>(pts) { new PointF(pts[pts.Length - 1].X, r.Bottom), new PointF(pts[0].X, r.Bottom) };
+            using (var b = new SolidBrush(Color.FromArgb(40, game.Accent))) g.FillPolygon(b, area.ToArray());
+            using (var pen = new Pen(game.Accent, P(2.5f))) g.DrawLines(pen, pts);
+        }
+        using (var b = new SolidBrush(game.Accent))
+            foreach (var p in pts) g.FillEllipse(b, p.X - P(3), p.Y - P(3), P(6), P(6));
+        var lp = pts[pts.Length - 1];
+        using (var b = new SolidBrush(TextC)) g.FillEllipse(b, lp.X - P(5), lp.Y - P(5), P(10), P(10));
+        DrawT(g, m == RCT ? "lower is better" : "higher is better", fSmall, Muted, r.Right - P(110), r.Bottom + P(6));
+    }
+
+    void PaintPlay(Graphics g)
+    {
+        float W = ClientSize.Width, H = ClientSize.Height, m = P(28);
+        if (playMode == RCT) { PaintReaction(g); return; }
+        g.Clear(game.Bg);
+        FillRound(g, Blend(game.Bg, Color.White, 0.025f), arena, P(18));
+        DrawRound(g, Blend(game.Bg, Color.White, 0.07f), arena, P(18), 1);
+
+        if (playMode == FLK)
+        {
+            if (countdown <= 0)
+            {
+                DrawTarget(g, tx, ty, tr, false);
+                double to = FlickTimeout[playDiff];
+                if (to > 0)
+                {
+                    float frac = (float)Math.Max(0, 1 - (sw.Elapsed.TotalSeconds - spawnT) / to);
+                    float rr = (float)tr + P(7);
+                    using (var pen = new Pen(Color.FromArgb(160, TextC), P(2)))
+                        g.DrawArc(pen, (float)tx - rr, (float)ty - rr, rr * 2, rr * 2, -90, 360 * frac);
+                }
+            }
+        }
+        else if (playMode == BOT) foreach (var b in bots.OrderBy(x => x.U)) DrawBot(g, b);
+        else DrawTarget(g, bx, by + jumpOff, br, countdown <= 0 && Hit(cx - bx, cy - (by + jumpOff), br));
+
+        // HUD
+        string left = playMode == FND
+            ? game.Name.ToUpper() + "  ·  SENS FINDER  ·  ROUND " + Math.Min(fIdx + 1, 5) + " OF 5"
+            : game.Name.ToUpper() + "  ·  " + playMode.ToUpper() + "  ·  " + DiffNames[playDiff].ToUpper();
+        DrawT(g, left, fLabel, Muted, m, m);
+        var bar = new RectangleF(W / 2 - P(200), m + P(4), P(400), P(6));
+        FillRound(g, Blend(game.Bg, Color.White, 0.1f), bar, P(3));
+        FillRound(g, game.Accent, new RectangleF(bar.X, bar.Y, bar.Width * (float)Math.Max(0, timeLeft / roundLen), bar.Height), P(3));
+        DrawTC(g, Math.Max(0, timeLeft).ToString("0.0"), fH3, TextC, new RectangleF(bar.X, bar.Bottom + P(6), bar.Width, P(28)));
+        string score = playMode == FLK
+            ? hits + " hits  ·  " + (hits + misses > 0 ? (hits * 100 / (hits + misses)) + "% accuracy" : "–")
+            : playMode == BOT
+            ? kills + " kills  ·  " + (botHits > 0 ? (headHits * 100 / botHits) + "% headshots" : "–")
+            : (totTime > 0 ? (onTime / totTime * 100).ToString("0") : "0") + "% on target";
+        float sw2 = g.MeasureString(score, fH3).Width;
+        DrawT(g, score, fH3, TextC, W - m - sw2, m - P(4));
+        DrawTC(g, "Esc to stop", fSmall, Muted, new RectangleF(0, H - m - P(20), W, P(20)));
+
+        if (countdown > 0)
+        {
+            string sub = playMode == FND && fIdx > 0 ? "Next round, new hidden sensitivity" : (playMode == FLK ? "Click the targets as they appear" : playMode == BOT ? "Body shots do 1 damage. Headshots kill instantly." : "Keep your crosshair on the ball");
+            DrawTC(g, Math.Ceiling(countdown).ToString("0"), fHuge, TextC, new RectangleF(0, H * 0.18f, W, P(130)));
+            DrawTC(g, sub, fBody, Muted, new RectangleF(0, H * 0.18f + P(130), W, P(30)));
+        }
+        DrawCrosshair(g, cx, cy);
+        if (playMode == BOT && hitMarkT > 0)
+        {
+            float a = P(7), b2 = P(13);
+            using (var pen = new Pen(hitMarkHead ? Color.FromArgb(255, 90, 90) : Color.White, P(2)))
+            {
+                g.DrawLine(pen, cx - b2, cy - b2, cx - a, cy - a);
+                g.DrawLine(pen, cx + a, cy - a, cx + b2, cy - b2);
+                g.DrawLine(pen, cx - b2, cy + b2, cx - a, cy + a);
+                g.DrawLine(pen, cx + a, cy + a, cx + b2, cy + b2);
+            }
+        }
+    }
+
+    void DrawBot(Graphics g, Bot b)
+    {
+        float k = b.Dead ? (float)Math.Max(0, b.DeadT / 0.25) : 1f;   // fades and shrinks when it dies
+        float u = (float)b.U * (0.6f + 0.4f * k), x = (float)b.X, ground = (float)b.Ground;
+        float bodyH = 1.9f * u, headR = 0.31f * u, bodyTop = ground - bodyH, headCy = bodyTop - 0.08f * u - headR;
+        int alpha = (int)(255 * k);
+        var body = new RectangleF(x - u / 2, bodyTop, u, bodyH);
+        var head = new RectangleF(x - headR, headCy - headR, headR * 2, headR * 2);
+        using (var main = new SolidBrush(Color.FromArgb(alpha, 0, 224, 226)))
+        using (var shade = new SolidBrush(Color.FromArgb((int)(alpha * 0.45), 0, 120, 140)))
+        using (var lite = new SolidBrush(Color.FromArgb((int)(alpha * 0.35), 255, 255, 255)))
+        using (var bodyPath = Round(body, u / 2))
+        {
+            // soft shadow on the floor
+            using (var sh = new SolidBrush(Color.FromArgb((int)(alpha * 0.25), 0, 0, 0)))
+                g.FillEllipse(sh, x - u * 0.6f, ground - u * 0.08f, u * 1.2f, u * 0.2f);
+            g.FillPath(main, bodyPath);
+            g.FillEllipse(main, head);
+            // right-side shading and a highlight give the flat shapes some roundness
+            g.SetClip(bodyPath);
+            g.FillRectangle(shade, x + u * 0.12f, bodyTop, u / 2, bodyH);
+            g.ResetClip();
+            using (var hp = new GraphicsPath())
+            {
+                hp.AddEllipse(head);
+                g.SetClip(hp);
+                g.FillRectangle(shade, x + headR * 0.25f, head.Y, headR, head.Height);
+                g.ResetClip();
+            }
+            g.FillEllipse(lite, x - u * 0.32f, bodyTop + u * 0.18f, u * 0.18f, u * 0.5f);
+            g.FillEllipse(lite, x - headR * 0.6f, headCy - headR * 0.7f, headR * 0.5f, headR * 0.5f);
+            if (b.Flash > 0)
+                using (var fl = new SolidBrush(Color.FromArgb(170, 255, 255, 255))) { g.FillPath(fl, bodyPath); g.FillEllipse(fl, head); }
+        }
+        if (!b.Dead)
+        {
+            float bw = u * 0.9f, bh = Math.Max(P(3), u * 0.07f), seg = (bw - 2 * P(2)) / 3, by2 = headCy - headR - bh - P(6);
+            for (int i = 0; i < 3; i++)
+                using (var br2 = new SolidBrush(i < b.Hp ? Color.FromArgb(240, 255, 255, 255) : Color.FromArgb(90, 0, 0, 0)))
+                    g.FillRectangle(br2, x - bw / 2 + i * (seg + P(2)), by2, seg, bh);
+        }
+    }
+
+    void DrawTarget(Graphics g, double x, double y, double r, bool on)
+    {
+        var rect = new RectangleF((float)(x - r), (float)(y - r), (float)(2 * r), (float)(2 * r));
+        Color c = on ? Blend(game.Accent, Color.White, 0.25) : game.Accent;
+        using (var b = new SolidBrush(c))
+        {
+            if (game.Square)
+            {
+                g.FillRectangle(b, rect);
+                using (var dark = new SolidBrush(Blend(c, Color.Black, 0.25)))
+                    g.FillRectangle(dark, rect.X + rect.Width * 0.55f, rect.Y + rect.Height * 0.15f, rect.Width * 0.3f, rect.Height * 0.3f);
+                using (var lite = new SolidBrush(Color.FromArgb(70, Color.White)))
+                    g.FillRectangle(lite, rect.X + rect.Width * 0.12f, rect.Y + rect.Height * 0.55f, rect.Width * 0.3f, rect.Height * 0.3f);
+            }
+            else
+            {
+                g.FillEllipse(b, rect);
+                using (var lite = new SolidBrush(Color.FromArgb(60, Color.White)))
+                    g.FillEllipse(lite, rect.X + rect.Width * 0.2f, rect.Y + rect.Height * 0.14f, rect.Width * 0.38f, rect.Height * 0.32f);
+            }
+        }
+        if (on)
+            using (var pen = new Pen(Color.White, P(3)))
+            {
+                var o = RectangleF.Inflate(rect, P(5), P(5));
+                if (game.Square) g.DrawRectangle(pen, o.X, o.Y, o.Width, o.Height); else g.DrawEllipse(pen, o);
+            }
+    }
+
+    void DrawCrosshair(Graphics g, float x, float y)
+    {
+        float gap = P(4), len = P(9);
+        using (var outline = new Pen(Color.FromArgb(200, 0, 0, 0), P(4)))
+        using (var pen = new Pen(Color.White, P(2)))
+        {
+            foreach (var p in new[] { outline, pen })
+            {
+                g.DrawLine(p, x - gap - len, y, x - gap, y);
+                g.DrawLine(p, x + gap, y, x + gap + len, y);
+                g.DrawLine(p, x, y - gap - len, x, y - gap);
+                g.DrawLine(p, x, y + gap, x, y + gap + len);
+            }
+        }
+        using (var b = new SolidBrush(Color.White)) g.FillEllipse(b, x - P(1.5f), y - P(1.5f), P(3), P(3));
+    }
+
+    void PaintReaction(Graphics g)
+    {
+        float W = ClientSize.Width, H = ClientSize.Height;
+        Color bg; string big, small;
+        int n = rTimes.Count;
+        switch (rState)
+        {
+            case 1: bg = Color.FromArgb(176, 38, 52); big = "Wait for green…"; small = "Try " + (n + 1) + " of 5"; break;
+            case 2: bg = Color.FromArgb(34, 170, 88); big = "CLICK!"; small = ""; break;
+            case 3: bg = game.Bg; big = lastReaction.ToString("0") + " ms"; small = "Click or press Space for try " + (n + 1) + " of 5"; break;
+            case 4: bg = Color.FromArgb(200, 120, 36); big = "Too soon!"; small = "Wait for the green screen. Click to try again."; break;
+            default: bg = game.Bg; big = "Reaction test"; small = "Click or press Space to start. When the screen turns green, click as fast as you can. 5 tries."; break;
+        }
+        g.Clear(bg);
+        DrawTC(g, big, rState == 3 ? fHuge : fBig, Color.White, new RectangleF(0, H / 2 - P(110), W, P(140)));
+        DrawTC(g, small, fBody, Color.FromArgb(225, 255, 255, 255), new RectangleF(P(40), H / 2 + P(40), W - P(80), P(60)));
+        if (n > 0) DrawTC(g, "So far: " + string.Join("  ·  ", rTimes.Select(t => t.ToString("0")).ToArray()) + " ms", fH3, Color.FromArgb(220, 255, 255, 255), new RectangleF(0, H - P(110), W, P(30)));
+        DrawTC(g, "Esc to stop", fSmall, Color.FromArgb(180, 255, 255, 255), new RectangleF(0, H - P(48), W, P(20)));
+    }
+
+    void PaintResults(Graphics g)
+    {
+        float W = ClientSize.Width, H = ClientSize.Height, m = P(48);
+        g.Clear(UiBg);
+        DrawT(g, resTitle.ToUpper(), fLabel, Muted, m, m);
+        DrawT(g, resMain, fHuge, game.Accent, m - P(6), m + P(24));
+        float mainW = g.MeasureString(resMain, fHuge).Width;
+        if (resPB)
+        {
+            var badge = new RectangleF(m + mainW + P(6), m + P(70), P(180), P(34));
+            FillRound(g, Good, badge, P(17));
+            DrawTC(g, "NEW PERSONAL BEST", fLabel, Color.FromArgb(10, 30, 16), badge);
+        }
+        DrawT(g, resLabel, fBody, Muted, m, m + P(150));
+        float y = m + P(196);
+        foreach (var l in resLines) { DrawT(g, l, fBody, TextC, m, y); y += P(30); }
+
+        float colW = Math.Min(P(560), W / 2 - m * 1.5f);
+        if (playMode == FND && fScores != null) DrawFinderChart(g, new RectangleF(m, y + P(20), colW, P(220)));
+
+        // coach panel
+        if (showCoach)
+        {
+            float px = Math.Max(W / 2, m + colW + P(40)), pw = W - px - m;
+            var panel = new RectangleF(px, m + P(24), pw, P(330));
+            FillRound(g, Panel, panel, P(12));
+            DrawT(g, coachHead, fLabel, Muted, panel.X + P(24), panel.Y + P(22));
+            DrawTW(g, coachText, fBody, TextC, new RectangleF(panel.X + P(24), panel.Y + P(52), panel.Width - P(48), P(130)));
+            float cy2 = panel.Y + P(190);
+            if (!double.IsNaN(sugSens))
+            {
+                if (!sugApplied)
+                {
+                    DrawT(g, "Try " + game.Fmt(sugSens) + "  (now " + game.Fmt(Sens(game)) + ")", fH2, game.Accent, panel.X + P(22), cy2);
+                    AddBtn(g, new RectangleF(panel.X + P(24), cy2 + P(48), P(170), P(42)), "Use " + game.Fmt(sugSens), ApplySuggestion, true, false);
+                    AddBtn(g, new RectangleF(panel.X + P(206), cy2 + P(48), P(170), P(42)), "Keep " + game.Fmt(Sens(game)), () => sugSens = double.NaN, false, false);
+                }
+                else
+                    DrawTW(g, "Saved. The trainer now uses " + game.Fmt(Sens(game)) + ". Set the same number in " + game.Name + " so they match.",
+                        fBody, Good, new RectangleF(panel.X + P(24), cy2, panel.Width - P(48), P(80)));
+            }
+            else if (playMode != RCT)
+                DrawT(g, "Current sens: " + game.Fmt(Sens(game)), fH3, Muted, panel.X + P(24), cy2);
+
+            if (scoreCode != "")
+            {
+                var cp = new RectangleF(px, panel.Bottom + P(18), pw, P(178));
+                FillRound(g, Panel, cp, P(12));
+                DrawT(g, "LEADERBOARD SCORE CODE", fLabel, Muted, cp.X + P(24), cp.Y + P(20));
+                using (var mono = new Font("Consolas", 9.5f))
+                    DrawTW(g, scoreCode, mono, TextC, new RectangleF(cp.X + P(24), cp.Y + P(46), cp.Width - P(48), P(44)));
+                AddBtn(g, new RectangleF(cp.X + P(24), cp.Y + P(98), P(180), P(42)), "Copy score code", CopyCode, true, false);
+                AddBtn(g, new RectangleF(cp.X + P(216), cp.Y + P(98), P(180), P(42)), "Open leaderboard ↗", OpenLeaderboard, false, false);
+                DrawT(g, copyNote != "" ? copyNote : "Record your run so a mod can verify it.", fSmall, copyNote != "" ? Good : Muted, cp.X + P(24), cp.Y + P(148));
+            }
+        }
+
+        float by2 = H - m - P(54);
+        AddBtn(g, new RectangleF(m, by2, P(220), P(54)), "Play again   (Space)", () => StartPlay(playMode), true, false);
+        AddBtn(g, new RectangleF(m + P(236), by2, P(160), P(54)), "Back   (Esc)", () => GoGame(game), false, false);
+    }
+
+    void DrawFinderChart(Graphics g, RectangleF r)
+    {
+        DrawT(g, "% ON TARGET AT EACH SENSITIVITY", fLabel, Muted, r.X, r.Y);
+        float top = r.Y + P(30), h = r.Height - P(70), bw = r.Width / 5;
+        double max = Math.Max(1, fScores.Max());
+        for (int i = 0; i < 5; i++)
+        {
+            float bh = (float)(fScores[i] / max * h);
+            var bar = new RectangleF(r.X + i * bw + bw * 0.18f, top + h - bh, bw * 0.64f, bh);
+            bool best = fScores[i] == fScores.Max();
+            FillRound(g, best ? game.Accent : Blend(Panel, game.Accent, 0.35), bar, P(4));
+            DrawTC(g, fScores[i].ToString("0") + "%", fSmall, TextC, new RectangleF(bar.X - P(10), bar.Y - P(22), bar.Width + P(20), P(20)));
+            double s = game.SensFor(game.DegPerCount(Sens(game)) * fMults[i]);
+            DrawTC(g, game.Fmt(s), fSmall, best ? game.Accent : Muted, new RectangleF(r.X + i * bw, top + h + P(6), bw, P(20)));
+        }
+    }
+
+    static Icon MakeIcon()
+    {
+        var bmp = new Bitmap(64, 64);
+        using (var g = Graphics.FromImage(bmp))
+        {
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            g.Clear(Color.Transparent);
+            using (var b = new SolidBrush(Color.FromArgb(15, 17, 21))) g.FillEllipse(b, 2, 2, 60, 60);
+            using (var p = new Pen(Color.FromArgb(255, 84, 98), 6)) g.DrawEllipse(p, 12, 12, 40, 40);
+            using (var p = new Pen(Color.White, 4)) { g.DrawLine(p, 32, 4, 32, 22); g.DrawLine(p, 32, 42, 32, 60); g.DrawLine(p, 4, 32, 22, 32); g.DrawLine(p, 42, 32, 60, 32); }
+        }
+        return Icon.FromHandle(bmp.GetHicon());
+    }
+
+    [STAThread]
+    static void Main()
+    {
+        try { SetProcessDPIAware(); } catch { }
+        try { File.Delete(Application.ExecutablePath + ".old"); } catch { }   // left behind by the last update
+        timeBeginPeriod(1);
+        Application.EnableVisualStyles();
+        Application.SetCompatibleTextRenderingDefault(false);
+        Application.Run(new Trainer());
+    }
+}

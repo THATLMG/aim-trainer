@@ -1,0 +1,8 @@
+# Only the app's source, build script and public info go on GitHub.
+*
+!.gitignore
+!AimTrainer.cs
+!build.ps1
+!README.md
+!README.txt
+!news.json
