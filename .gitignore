@@ -6,3 +6,7 @@
 !README.md
 !README.txt
 !news.json
+!docs/
+!docs/**
+!supabase/
+!supabase/setup.sql

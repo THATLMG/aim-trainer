@@ -1,0 +1,432 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Leaderboard · Aim Trainer</title>
+<meta name="description" content="Verified Aim Trainer scores for Valorant, CS2, Fortnite, Apex, Overwatch 2, Minecraft and Roblox.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Ccircle cx='20' cy='20' r='12' fill='none' stroke='%23ff4655' stroke-width='4'/%3E%3Cpath d='M20 2v10M20 28v10M2 20h10M28 20h10' stroke='white' stroke-width='3'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;600;700&family=Barlow:wght@400;500;600&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="backdrop" aria-hidden="true"></div>
+<nav class="nav">
+  <div class="wrap">
+    <a class="logo" href="index.html">
+      <svg width="28" height="28" viewBox="0 0 40 40" aria-hidden="true"><circle cx="20" cy="20" r="12" fill="none" stroke="#ff4655" stroke-width="3"/><path d="M20 2v10M20 28v10M2 20h10M28 20h10" stroke="#eaf0f6" stroke-width="2.5"/><circle cx="20" cy="20" r="2" fill="#eaf0f6"/></svg>
+      Aim Trainer
+    </a>
+    <div class="links">
+      <a class="hide-sm" href="index.html">Home</a>
+      <a class="btn small primary dl-link" href="#">Download</a>
+      <span id="who"></span>
+    </div>
+  </div>
+</nav>
+
+<main class="wrap app">
+  <div>
+    <span class="eyebrow">Verified by clip</span>
+    <h2 style="margin-top:8px">Leaderboard</h2>
+  </div>
+  <div id="notice"></div>
+  <div class="tabs" role="tablist" id="tabs">
+    <button role="tab" data-view="board" aria-selected="true">Leaderboard</button>
+    <button role="tab" data-view="submit" aria-selected="false">Submit a run</button>
+    <button role="tab" data-view="review" aria-selected="false" hidden>Review</button>
+    <button role="tab" data-view="admin" aria-selected="false" hidden>Owner</button>
+  </div>
+
+  <section id="view-board" style="padding:0" class="stack">
+    <div class="panel stack">
+      <div><p class="label">Game</p><div class="chips" id="f-game"></div></div>
+      <div class="row">
+        <div><p class="label">Mode</p><div class="chips" id="f-mode"></div></div>
+        <div id="f-diff-wrap"><p class="label">Difficulty</p><div class="chips" id="f-diff"></div></div>
+        <label class="toggle"><input type="checkbox" id="f-verified"> Verified only</label>
+      </div>
+    </div>
+    <div class="row" style="justify-content:space-between;align-items:baseline"><h3 id="board-title"></h3><span class="muted" id="board-sub"></span></div>
+    <div class="panel tablewrap" style="padding:6px 10px" id="board"></div>
+  </section>
+
+  <section id="view-submit" style="padding:0" hidden>
+    <div class="grid2">
+      <div class="panel stack" id="submit-panel">
+        <div>
+          <p class="label">1 · Paste your score code</p>
+          <textarea class="code" id="code" placeholder="AIM1.xxxxxxxx.xxxxxxxx" spellcheck="false" aria-label="Score code"></textarea>
+          <div id="preview" class="preview">After a round, click <b>Copy score code</b> on the results screen and paste it here.</div>
+        </div>
+        <div>
+          <p class="label">2 · Add a clip of the run</p>
+          <div class="seg" role="group" aria-label="Clip type">
+            <button id="clip-upload" aria-pressed="true">Upload video</button>
+            <button id="clip-link" aria-pressed="false">Paste a link</button>
+          </div>
+          <div id="clip-upload-box">
+            <input type="file" id="clip-file" accept="video/mp4,video/webm" aria-label="Clip file">
+            <p class="muted" id="clip-note" style="font-size:14px;margin:8px 0 0">MP4 or WebM, up to 20 MB (about 20–30 seconds). Record with Xbox Game Bar (Win+Alt+R) or Medal.</p>
+          </div>
+          <div id="clip-link-box" hidden>
+            <input type="url" id="clip-url" placeholder="https://youtu.be/… or https://medal.tv/…" aria-label="Clip link">
+            <p class="muted" style="font-size:14px;margin:8px 0 0">YouTube, Medal, Streamable or any https link that isn't private.</p>
+          </div>
+        </div>
+        <div><button class="btn primary" id="submit-btn" disabled>Submit run</button><div id="submit-msg" style="margin-top:12px"></div></div>
+      </div>
+      <div class="stack">
+        <div class="panel">
+          <p class="label">How it works</p>
+          <ol class="muted" style="margin:0;padding-left:20px;display:grid;gap:6px">
+            <li>Play Tracking, Flick, Bots or Reaction in the app.</li>
+            <li>Record the whole round and the results screen.</li>
+            <li>Copy the score code and submit it here with the clip.</li>
+            <li>A mod checks the clip and marks it Verified.</li>
+          </ol>
+        </div>
+        <div class="panel"><p class="label">Your runs</p><div id="mine"></div></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="view-review" style="padding:0" hidden>
+    <div class="panel"><div id="review-list"></div></div>
+  </section>
+
+  <section id="view-admin" style="padding:0" hidden>
+    <div class="stack">
+      <div class="banner">You're the <b>owner</b>. Only you can make mods and ban players, and nobody can take owner from you.</div>
+      <div class="panel"><p class="label">Players</p><div id="people"></div></div>
+    </div>
+  </section>
+
+  <section id="view-player" style="padding:0" hidden>
+    <div class="stack" id="player"></div>
+  </section>
+</main>
+
+<footer><div class="wrap"><span>Aim Trainer · made by THATLMG</span><span><a href="index.html">Home</a> · <a href="https://github.com/THATLMG/aim-trainer">GitHub</a></span></div></footer>
+
+<script src="config.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
+<script src="common.js"></script>
+<script>
+document.querySelectorAll(".dl-link").forEach(a => a.href = DOWNLOAD_URL);
+
+let scores = [], people = {}, view = "board", openClip = null, clipKind = "upload", busy = false;
+let fGame = "valorant", fMode = "B", fDiff = 1, onlyVerified = false;
+try { const s = JSON.parse(localStorage.getItem("at.filters") || "{}"); if (GAMES[s.g]) fGame = s.g; if (MODES[s.m]) fMode = s.m; if (s.d >= 0 && s.d < 4) fDiff = s.d; onlyVerified = !!s.v; } catch {}
+const saveFilters = () => { try { localStorage.setItem("at.filters", JSON.stringify({ g: fGame, m: fMode, d: fDiff, v: onlyVerified })); } catch {} };
+
+// ---------- data ----------
+async function load() {
+  if (!AT.sb) return;
+  const [s, p] = await Promise.all([
+    AT.sb.from("scores").select("*").order("created_at", { ascending: false }).limit(3000),
+    AT.sb.from("profiles").select("*").limit(2000)
+  ]);
+  scores = s.data || [];
+  people = {};
+  (p.data || []).forEach(x => people[x.id] = x);
+  if (AT.session) AT.profile = people[AT.session.user.id] || AT.profile;
+  render();
+}
+function err(e) { return (e && (e.message || e.error_description)) || "Something went wrong. Try again in a moment."; }
+
+// ---------- routing ----------
+function route() {
+  const h = location.hash.slice(1);
+  if (h.startsWith("player-")) view = "player";
+  else if (["board", "submit", "review", "admin"].includes(h)) view = h;
+  else view = "board";
+  render();
+}
+addEventListener("hashchange", route);
+document.querySelectorAll("#tabs button").forEach(b => b.onclick = () => { location.hash = b.dataset.view; });
+
+// ---------- render ----------
+function render() {
+  document.querySelectorAll("#tabs button").forEach(b => b.setAttribute("aria-selected", b.dataset.view === view));
+  ["board", "submit", "review", "admin", "player"].forEach(v => $("view-" + v).hidden = v !== view);
+  const rv = document.querySelector('[data-view="review"]'), ad = document.querySelector('[data-view="admin"]');
+  rv.hidden = !isStaff(); ad.hidden = !isOwner();
+  const pending = scores.filter(s => s.status === "pending").length;
+  rv.textContent = "Review"; if (pending && isStaff()) rv.append(el("span", { class: "count", text: String(pending) }));
+  renderWho(); renderNotice();
+  if (view === "board") renderBoard();
+  if (view === "submit") { renderMine(); updateSubmit(); }
+  if (view === "review") renderReview();
+  if (view === "admin") renderAdmin();
+  if (view === "player") renderPlayer(location.hash.slice(8));
+}
+
+function renderWho() {
+  const w = $("who"); w.textContent = "";
+  if (!AT.sb) return;
+  if (!AT.session) { w.append(el("button", { class: "btn small discord", text: "Log in with Discord", onclick: login })); return; }
+  const p = AT.profile || {};
+  w.append(el("span", { class: "userchip" }, [avatar(p), el("a", { href: "#player-" + AT.session.user.id, text: p.username || "You", style: "color:var(--text)" }), rolePill(p.role),
+    el("button", { class: "btn small", text: "Log out", onclick: logout })]));
+}
+
+function renderNotice() {
+  const n = $("notice"); n.textContent = "";
+  if (!configured()) n.append(el("div", { class: "banner" }, ["The leaderboard isn't connected yet. It opens as soon as the database is set up."]));
+  else if (AT.profile && AT.profile.banned) n.append(el("div", { class: "msg err", text: "This account is banned from submitting runs." }));
+}
+
+function playerCell(uid, row) {
+  const p = people[uid] || {};
+  return el("a", { class: "player", href: "#player-" + uid }, [avatar(p), el("span", {}, [el("span", { text: p.username || "Player" }), row ? el("span", { class: "ign", text: "in-game: " + row.ign }) : null])]);
+}
+
+function renderFilters() {
+  const g = $("f-game"); g.textContent = "";
+  for (const id in GAMES) g.append(el("button", { class: "chip", "aria-pressed": String(fGame === id), style: "--c:" + GAMES[id].color,
+    onclick: () => { fGame = id; openClip = null; saveFilters(); render(); } }, [el("i"), el("span", { text: GAMES[id].name })]));
+  const m = $("f-mode"); m.textContent = "";
+  for (const id in MODES) m.append(el("button", { class: "chip", "aria-pressed": String(fMode === id), onclick: () => { fMode = id; openClip = null; saveFilters(); render(); } }, [el("span", { text: MODES[id] })]));
+  const d = $("f-diff"); d.textContent = "";
+  DIFFS.forEach((name, i) => d.append(el("button", { class: "chip", "aria-pressed": String(fDiff === i), onclick: () => { fDiff = i; openClip = null; saveFilters(); render(); } }, [el("span", { text: name })])));
+  $("f-diff-wrap").hidden = fMode === "R";
+  $("f-verified").checked = onlyVerified;
+}
+$("f-verified").onchange = e => { onlyVerified = e.target.checked; saveFilters(); render(); };
+
+function renderBoard() {
+  renderFilters();
+  $("board-title").textContent = boardName(fGame, fMode, fDiff);
+  const lb = lowerBetter(fMode), best = {};
+  for (const s of scores) {
+    if (s.game !== fGame || s.mode !== fMode || (fMode !== "R" && s.diff !== fDiff)) continue;
+    if (s.status === "rejected" || (onlyVerified && s.status !== "verified")) continue;
+    if (people[s.user_id] && people[s.user_id].banned) continue;
+    const c = best[s.user_id];
+    if (!c || (lb ? +s.score < +c.score : +s.score > +c.score)) best[s.user_id] = s;
+  }
+  const rows = Object.values(best).sort((a, b) => lb ? a.score - b.score : b.score - a.score);
+  $("board-sub").textContent = rows.length ? rows.length + (rows.length === 1 ? " player" : " players") + " · best run each" + (lb ? " · lower is better" : "") : "";
+  const box = $("board"); box.textContent = "";
+  if (!configured()) { box.append(el("div", { class: "empty" }, [el("b", { text: "Coming soon" }), el("span", { text: "Download the app and start practising. Your score codes will work here once it opens." })])); return; }
+  if (!rows.length) {
+    box.append(el("div", { class: "empty" }, [el("b", { text: onlyVerified ? "No verified runs yet" : "No runs yet" }),
+      el("span", { text: "Play " + MODES[fMode] + (fMode === "R" ? "" : " on " + DIFFS[fDiff]) + " with " + GAMES[fGame].name + " selected, then submit your code." })]));
+    return;
+  }
+  const t = el("table"), tb = el("tbody");
+  t.append(el("thead", {}, [el("tr", {}, ["#", "Player", "Score", "Setup", "Date", "Status", ""].map(h => el("th", { text: h })))]), tb);
+  rows.forEach((s, i) => {
+    tb.append(el("tr", { class: i < 3 ? "top" + (i + 1) : "" }, [
+      el("td", { class: "rank", text: String(i + 1) }),
+      el("td", {}, [playerCell(s.user_id, s)]),
+      el("td", { class: "score", text: fmtScore(s.mode, s.score) }),
+      el("td", { class: "setup", text: fmtSens(s.game, s.sens) + " · " + s.dpi + " DPI · " + cm360(s.game, +s.sens, +s.dpi).toFixed(1) + " cm" }),
+      el("td", { class: "date", text: fmtDate(s.played_at) }),
+      el("td", {}, [statusPill(s.status)]),
+      el("td", {}, [el("button", { class: "btn small", text: openClip === s.id ? "Hide" : "Watch", onclick: () => { openClip = openClip === s.id ? null : s.id; render(); } })])
+    ]));
+    if (openClip === s.id) tb.append(el("tr", { class: "cliprow" }, [el("td", { colspan: "7" }, [clipNode(s)])]));
+  });
+  box.append(t);
+}
+
+// ---------- submit ----------
+function updatePreview() {
+  const box = $("preview"), d = decodeCode($("code").value);
+  box.className = "preview"; box.textContent = "";
+  if (!d) box.append("After a round, click ", el("b", { text: "Copy score code" }), " on the results screen and paste it here.");
+  else if (d.error) { box.classList.add("bad"); box.textContent = d.error; }
+  else {
+    const dup = scores.some(s => s.code === d.code);
+    box.classList.add(dup ? "bad" : "good");
+    box.append(el("div", { class: "big", text: fmtScore(d.mode, d.score) }),
+      el("dl", { class: "kv" }, [
+        el("dt", { text: "Run" }), el("dd", { text: boardName(d.game, d.mode, d.diff) }),
+        el("dt", { text: "In-game name" }), el("dd", { text: d.name }),
+        el("dt", { text: "Setup" }), el("dd", { text: fmtSens(d.game, d.sens) + " · " + d.dpi + " DPI" }),
+        el("dt", { text: "Played" }), el("dd", { text: new Date(d.t * 1000).toLocaleString() })]));
+    if (dup) box.append(el("p", { text: "This code was already submitted." }));
+  }
+  updateSubmit();
+}
+function clipReady() {
+  if (clipKind === "upload") { const f = $("clip-file").files[0]; return !!f && f.size <= MAX_CLIP && /^video\/(mp4|webm)$/.test(f.type); }
+  try { return new URL($("clip-url").value.trim()).protocol === "https:"; } catch { return false; }
+}
+function updateSubmit() {
+  const panel = $("submit-panel");
+  const loggedOut = !AT.session;
+  let gate = panel.querySelector(".gate");
+  if (loggedOut && configured() && !gate) panel.prepend(gate = el("div", { class: "msg gate" }, ["Log in to submit runs. ", el("button", { class: "btn small discord", text: "Log in with Discord", onclick: login })]));
+  if (!loggedOut && gate) gate.remove();
+  const d = decodeCode($("code").value);
+  $("submit-btn").disabled = !(d && !d.error && !scores.some(s => s.code === d.code) && clipReady() && AT.session && AT.profile && !AT.profile.banned && !busy);
+}
+async function submit() {
+  const d = decodeCode($("code").value);
+  if (!d || d.error || busy) return;
+  busy = true; updateSubmit();
+  const msg = $("submit-msg"); msg.textContent = "";
+  msg.append(el("div", { class: "msg", text: clipKind === "upload" ? "Uploading clip…" : "Saving…" }));
+  let path = null;
+  try {
+    let url = null;
+    if (clipKind === "upload") {
+      const f = $("clip-file").files[0];
+      path = AT.session.user.id + "/" + Date.now() + (f.type === "video/webm" ? ".webm" : ".mp4");
+      const up = await AT.sb.storage.from("clips").upload(path, f, { contentType: f.type });
+      if (up.error) throw up.error;
+    } else url = $("clip-url").value.trim();
+    const r = await AT.sb.rpc("submit_score", { p_code: d.code, p_clip_url: url, p_clip_path: path });
+    if (r.error) throw r.error;
+    msg.textContent = "";
+    msg.append(el("div", { class: "msg okm", text: "Submitted! It shows as Pending until a mod checks the clip." }));
+    $("code").value = ""; $("clip-file").value = ""; $("clip-url").value = "";
+    await load(); updatePreview();
+  } catch (e) {
+    if (path) await AT.sb.storage.from("clips").remove([path]);
+    msg.textContent = "";
+    msg.append(el("div", { class: "msg err", text: /exceeded|too large|size/i.test(err(e)) ? "That video is over 20 MB. Trim it or paste a link instead." : err(e) }));
+  }
+  busy = false; updateSubmit();
+}
+function renderMine() {
+  const box = $("mine"); box.textContent = "";
+  const mine = AT.session ? scores.filter(s => s.user_id === AT.session.user.id) : [];
+  if (!mine.length) { box.append(el("p", { class: "muted", text: "Nothing yet. Your runs and their review status show up here." })); return; }
+  for (const s of mine) box.append(el("div", { class: "listrow" }, [
+    el("div", {}, [el("div", { text: boardName(s.game, s.mode, s.diff) }), el("div", { class: "muted", style: "font-size:14px", text: fmtScore(s.mode, s.score) + " · " + fmtDate(s.played_at) })]),
+    el("div", { class: "acts" }, [statusPill(s.status), el("button", { class: "btn small no", text: "Delete", onclick: e => removeScore(s, e.target) })])
+  ]));
+}
+async function removeScore(s, btn) {
+  btn.disabled = true;
+  const r = await AT.sb.rpc("delete_score", { p_id: s.id });
+  if (r.error) { btn.disabled = false; alertMsg(err(r.error)); return; }
+  if (r.data) await AT.sb.storage.from("clips").remove([r.data]);
+  load();
+}
+function alertMsg(t) { const n = $("notice"); n.textContent = ""; n.append(el("div", { class: "msg err", text: t })); }
+
+$("code").addEventListener("input", updatePreview);
+$("clip-url").addEventListener("input", updateSubmit);
+$("clip-file").addEventListener("change", () => {
+  const f = $("clip-file").files[0], note = $("clip-note");
+  if (f && f.size > MAX_CLIP) { note.textContent = "That file is " + (f.size / 1048576).toFixed(1) + " MB. The limit is 20 MB, so trim it or paste a link."; note.style.color = "var(--bad)"; }
+  else { note.textContent = "MP4 or WebM, up to 20 MB (about 20–30 seconds). Record with Xbox Game Bar (Win+Alt+R) or Medal."; note.style.color = ""; }
+  updateSubmit();
+});
+function setClip(k) {
+  clipKind = k;
+  $("clip-upload").setAttribute("aria-pressed", k === "upload"); $("clip-link").setAttribute("aria-pressed", k === "link");
+  $("clip-upload-box").hidden = k !== "upload"; $("clip-link-box").hidden = k !== "link";
+  updateSubmit();
+}
+$("clip-upload").onclick = () => setClip("upload");
+$("clip-link").onclick = () => setClip("link");
+$("submit-btn").onclick = submit;
+
+// ---------- review (mods + owner) ----------
+function renderReview() {
+  const box = $("review-list"); box.textContent = "";
+  if (!isStaff()) { box.append(el("p", { class: "muted", text: "Only mods and the owner can review runs." })); return; }
+  const pending = scores.filter(s => s.status === "pending").sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+  const done = scores.filter(s => s.status !== "pending").sort((a, b) => new Date(b.reviewed_at || 0) - new Date(a.reviewed_at || 0)).slice(0, 15);
+  box.append(el("p", { class: "label", text: pending.length ? pending.length + " waiting for review" : "All caught up" }));
+  if (!pending.length && !done.length) { box.append(el("div", { class: "empty" }, [el("b", { text: "Nothing to review" }), el("span", { text: "New runs show up here." })])); return; }
+  if (done.length) pending.push(...done);
+  for (const s of pending) {
+    const acts = el("div", { class: "acts" }, [
+      el("button", { class: "btn small ok", text: "✓ Verify", disabled: s.status === "verified" ? "" : null, onclick: () => review(s, "verified") }),
+      el("button", { class: "btn small no", text: "✕ Reject", disabled: s.status === "rejected" ? "" : null, onclick: () => review(s, "rejected") })]);
+    if (isOwner()) acts.append(el("button", { class: "btn small", text: "Delete", onclick: e => removeScore(s, e.target) }));
+    box.append(el("div", { class: "review" }, [
+      el("div", { class: "stack" }, [
+        el("div", { class: "row", style: "align-items:center" }, [playerCell(s.user_id, s), statusPill(s.status)]),
+        el("dl", { class: "kv" }, [
+          el("dt", { text: "Run" }), el("dd", { text: boardName(s.game, s.mode, s.diff) }),
+          el("dt", { text: "Score" }), el("dd", { text: fmtScore(s.mode, s.score) + "  (check it matches the clip)" }),
+          el("dt", { text: "Setup" }), el("dd", { text: fmtSens(s.game, s.sens) + " · " + s.dpi + " DPI" }),
+          el("dt", { text: "Played" }), el("dd", { text: new Date(s.played_at).toLocaleString() })]),
+        clipNode(s)]),
+      acts]));
+  }
+}
+async function review(s, status) {
+  const r = await AT.sb.rpc("review_score", { p_id: s.id, p_status: status });
+  if (r.error) alertMsg(err(r.error)); else load();
+}
+
+// ---------- owner ----------
+function renderAdmin() {
+  const box = $("people"); box.textContent = "";
+  if (!isOwner()) { box.append(el("p", { class: "muted", text: "Only the owner can see this." })); return; }
+  const list = Object.values(people).sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+  for (const p of list) {
+    const me = AT.session && p.id === AT.session.user.id;
+    const runs = scores.filter(s => s.user_id === p.id).length;
+    const acts = el("div", { class: "acts" });
+    if (!me) {
+      acts.append(el("button", { class: "btn small " + (p.role === "mod" ? "no" : "ok"), text: p.role === "mod" ? "Remove mod" : "Make mod", disabled: p.banned ? "" : null,
+        onclick: () => adminCall("set_role", { p_user: p.id, p_role: p.role === "mod" ? "player" : "mod" }) }));
+      acts.append(el("button", { class: "btn small " + (p.banned ? "ok" : "no"), text: p.banned ? "Unban" : "Ban", onclick: () => adminCall("set_banned", { p_user: p.id, p_banned: !p.banned }) }));
+    }
+    box.append(el("div", { class: "listrow" }, [
+      el("div", { class: "row", style: "align-items:center;gap:10px" }, [el("a", { class: "player", href: "#player-" + p.id }, [avatar(p), el("span", { text: p.username + (me ? " (you)" : "") })]), rolePill(p.role), p.banned ? el("span", { class: "pill no", text: "Banned" }) : null,
+        el("span", { class: "muted", style: "font-size:13px", text: runs + (runs === 1 ? " run" : " runs") + " · joined " + fmtDate(p.created_at) })]),
+      acts]));
+  }
+}
+async function adminCall(fn, args) {
+  const r = await AT.sb.rpc(fn, args);
+  if (r.error) alertMsg(err(r.error)); else load();
+}
+
+// ---------- player page ----------
+function renderPlayer(id) {
+  const box = $("player"); box.textContent = "";
+  const p = people[id];
+  if (!p) { box.append(el("div", { class: "panel empty" }, [el("b", { text: "Player not found" })])); return; }
+  const runs = scores.filter(s => s.user_id === id && s.status !== "rejected");
+  const verified = runs.filter(s => s.status === "verified").length;
+  box.append(el("div", { class: "panel row", style: "align-items:center;gap:18px" }, [avatar(p, 72),
+    el("div", { class: "stack", style: "gap:6px" }, [el("div", { class: "row", style: "align-items:center;gap:10px" }, [el("h2", { text: p.username, style: "font-size:34px" }), rolePill(p.role)]),
+      el("span", { class: "muted", text: runs.length + " runs · " + verified + " verified · joined " + fmtDate(p.created_at) })])]));
+  const best = {};
+  for (const s of runs) {
+    const k = s.game + s.mode + (s.mode === "R" ? 0 : s.diff), c = best[k];
+    if (!c || (lowerBetter(s.mode) ? +s.score < +c.score : +s.score > +c.score)) best[k] = s;
+  }
+  const rows = Object.values(best);
+  const panel = el("div", { class: "panel tablewrap" }, [el("p", { class: "label", text: "Personal bests" })]);
+  if (!rows.length) panel.append(el("p", { class: "muted", text: "No runs yet." }));
+  else {
+    const t = el("table"), tb = el("tbody");
+    t.append(el("thead", {}, [el("tr", {}, ["Board", "Score", "Setup", "Date", "Status", ""].map(h => el("th", { text: h })))]), tb);
+    for (const s of rows) {
+      tb.append(el("tr", {}, [el("td", { text: boardName(s.game, s.mode, s.diff) }), el("td", { class: "score", text: fmtScore(s.mode, s.score) }),
+        el("td", { class: "setup", text: fmtSens(s.game, s.sens) + " · " + s.dpi + " DPI" }), el("td", { class: "date", text: fmtDate(s.played_at) }),
+        el("td", {}, [statusPill(s.status)]), el("td", {}, [el("button", { class: "btn small", text: openClip === s.id ? "Hide" : "Watch", onclick: () => { openClip = openClip === s.id ? null : s.id; render(); } })])]));
+      if (openClip === s.id) tb.append(el("tr", { class: "cliprow" }, [el("td", { colspan: "6" }, [clipNode(s)])]));
+    }
+    panel.append(t);
+  }
+  box.append(panel);
+}
+
+// ---------- start ----------
+(async () => {
+  route();
+  await initAuth();
+  AT.listeners.push(() => load());
+  await load();
+  route();
+  setInterval(() => { if (!document.hidden && !busy) load(); }, 30000);
+})();
+</script>
+</body>
+</html>

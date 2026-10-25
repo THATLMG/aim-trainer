@@ -1,0 +1,386 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Aim Trainer: free aim training for Valorant, CS2, Fortnite and more</title>
+<meta name="description" content="A free Windows aim trainer with game-matched sensitivity, bots, flicks, tracking, reaction tests, a sensitivity coach and a verified leaderboard.">
+<meta property="og:title" content="Aim Trainer">
+<meta property="og:description" content="Free aim training matched to your real in-game sensitivity. Bots, flicks, tracking, sens coach and a verified leaderboard.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Ccircle cx='20' cy='20' r='12' fill='none' stroke='%23ff4655' stroke-width='4'/%3E%3Cpath d='M20 2v10M20 28v10M2 20h10M28 20h10' stroke='white' stroke-width='3'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;600;700&family=Barlow:wght@400;500;600&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="backdrop" aria-hidden="true"></div>
+
+<nav class="nav">
+  <div class="wrap">
+    <a class="logo" href="#top">
+      <svg width="28" height="28" viewBox="0 0 40 40" aria-hidden="true"><circle cx="20" cy="20" r="12" fill="none" stroke="#ff4655" stroke-width="3"/><path d="M20 2v10M20 28v10M2 20h10M28 20h10" stroke="#eaf0f6" stroke-width="2.5"/><circle cx="20" cy="20" r="2" fill="#eaf0f6"/></svg>
+      Aim Trainer
+    </a>
+    <div class="links">
+      <a class="hide-sm" href="#modes">Modes</a>
+      <a class="hide-sm" href="#features">Features</a>
+      <a class="hide-sm" href="#changelog">Updates</a>
+      <a href="board.html">Leaderboard</a>
+      <a class="btn small primary dl-link" href="#">Download</a>
+    </div>
+  </div>
+</nav>
+
+<header class="hero" id="top">
+  <div class="wrap">
+    <div class="hero-copy reveal">
+      <span class="eyebrow">Free · Windows 10 &amp; 11</span>
+      <h1>Aim like it <span class="hl">counts.</span></h1>
+      <p class="lead">An aim trainer that moves exactly like your game. Put in your Valorant, CS2 or Fortnite sensitivity and every flick, track and headshot feels the same as in-game. Then a coach tells you if your sens is holding you back.</p>
+      <div class="hero-cta">
+        <a class="btn primary btn-download dl-link" href="#">
+          <svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m0 0l-5-5m5 5l5-5M4 19h16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          Download free
+        </a>
+        <a class="btn" href="board.html">View leaderboard</a>
+      </div>
+      <div class="dl-meta" id="dl-meta">Latest version · Windows 10/11 · no install needed</div>
+    </div>
+
+    <div class="demo reveal" id="demo">
+      <canvas id="demo-canvas" aria-label="Playable bot shooting demo"></canvas>
+      <span class="corner tl"></span><span class="corner tr"></span><span class="corner bl"></span><span class="corner br"></span>
+      <div class="hud"><span>Demo · Bots</span><span><b id="demo-kills">0</b> kills · <b id="demo-time">20.0</b>s</span></div>
+      <div class="overlay" id="demo-start">
+        <div class="big">Try it right here</div>
+        <div class="muted">Shoot the bots. Headshots kill instantly, body shots take 3.</div>
+        <div><button class="btn cyan" id="demo-go">Start 20s demo</button></div>
+      </div>
+      <div class="overlay" id="demo-end" hidden>
+        <div class="eyebrow">Round over</div>
+        <div class="big" id="demo-result">0 kills</div>
+        <div class="muted" id="demo-sub"></div>
+        <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap">
+          <button class="btn" id="demo-again">Play again</button>
+          <a class="btn primary dl-link" href="#">Get the full app</a>
+        </div>
+      </div>
+    </div>
+  </div>
+</header>
+
+<div class="strip">
+  <div class="wrap">
+    <div class="stat"><span class="num">7</span><span class="lbl">game sensitivity profiles</span></div>
+    <div class="stat"><span class="num">5</span><span class="lbl">training modes, 4 difficulties</span></div>
+    <div class="stat"><span class="num">1:1</span><span class="lbl">raw mouse input, like your game</span></div>
+    <div class="stat"><span class="num">Auto</span><span class="lbl">updates itself in one click</span></div>
+  </div>
+</div>
+
+<section id="games">
+  <div class="wrap">
+    <div class="section-head reveal">
+      <span class="eyebrow">Your game, your sens</span>
+      <h2>Pick your game. It handles the math.</h2>
+      <p class="lead">Each game turns sensitivity into movement differently. Aim Trainer uses the real formula for each one, so 0.35 in Valorant feels like 0.35 in Valorant.</p>
+    </div>
+    <div class="games reveal" id="game-list"></div>
+  </div>
+</section>
+
+<section id="modes">
+  <div class="wrap">
+    <div class="section-head reveal">
+      <span class="eyebrow">Training modes</span>
+      <h2>Five ways to get better.</h2>
+    </div>
+    <div class="modes">
+      <div class="mode reveal"><div class="viz"><span class="ball"></span><span class="xh" style="left:52%"></span></div>
+        <div class="txt"><h3>Tracking</h3><p>Stay on a ball that strafes, jumps and changes direction. Score is time on target.</p></div></div>
+      <div class="mode reveal"><div class="viz"><span class="pop"></span><span class="pop"></span><span class="pop"></span></div>
+        <div class="txt"><h3>Flick</h3><p>Targets pop up and you snap to them. Hard and Insane targets vanish if you're slow.</p></div></div>
+      <div class="mode reveal"><div class="viz"><span class="bot"></span><span class="bot b2"></span></div>
+        <div class="txt"><h3>Bots</h3><p>Strafing and standing bots with 3 HP. Headshots kill instantly.</p></div></div>
+      <div class="mode reveal"><div class="viz react"></div>
+        <div class="txt"><h3>Reaction</h3><p>Wait for green, then click. Five tries, measured in milliseconds.</p></div></div>
+      <div class="mode reveal"><div class="viz"><div class="bars"><i style="height:45%"></i><i style="height:70%"></i><i style="height:92%"></i><i style="height:64%"></i><i style="height:40%"></i></div></div>
+        <div class="txt"><h3>Sens finder</h3><p>Five blind rounds at hidden sens values. It finds the one you actually aim best with.</p></div></div>
+    </div>
+  </div>
+</section>
+
+<section id="features">
+  <div class="wrap">
+    <div class="section-head reveal">
+      <span class="eyebrow">Built in</span>
+      <h2>More than clicking circles.</h2>
+    </div>
+    <div class="features">
+      <div class="feature wide reveal">
+        <span class="tag">Sensitivity coach</span>
+        <h3>It watches how you aim and tells you what to change.</h3>
+        <p>After every Tracking, Flick and Bots round it checks whether you overshoot or fall behind, then suggests a new sens in your game's own numbers.</p>
+        <div class="coach">Your first flick landed at <b>112%</b> of the distance on average, so you tend to fly past the target. Try <b>0.31</b> instead of <b>0.35</b> in Valorant.</div>
+      </div>
+      <div class="feature reveal">
+        <span class="tag">Leaderboard</span>
+        <h3>Scores that are actually real.</h3>
+        <p>Every run gets a signed score code. Submit it with a clip, and mods verify it before it counts.</p>
+      </div>
+      <div class="feature reveal">
+        <span class="tag">Music</span>
+        <h3>Your music and live lyrics.</h3>
+        <p>See what's playing in Spotify or YouTube, skip or pause, and get lyrics that follow along while you train.</p>
+        <div><span class="lyric-bubble">lyrics show up right here</span></div>
+      </div>
+      <div class="feature reveal">
+        <span class="tag">Raw input</span>
+        <h3>No mouse acceleration.</h3>
+        <p>Reads your mouse directly, the same way games do, so Windows pointer settings never get in the way.</p>
+      </div>
+      <div class="feature reveal">
+        <span class="tag">Updates</span>
+        <h3>Always the newest version.</h3>
+        <p>When something new drops, the app shows Update now and swaps itself in. No re-downloading.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="leaders">
+  <div class="wrap">
+    <div class="section-head reveal">
+      <span class="eyebrow">Live</span>
+      <h2>Latest verified runs.</h2>
+    </div>
+    <div class="panel reveal" id="recent"><p class="muted">Loading…</p></div>
+    <p style="margin-top:16px"><a class="btn" href="board.html">Open the full leaderboard →</a></p>
+  </div>
+</section>
+
+<section id="install">
+  <div class="wrap">
+    <div class="section-head reveal">
+      <span class="eyebrow">Setup</span>
+      <h2>Playing in under a minute.</h2>
+    </div>
+    <div class="steps">
+      <div class="step reveal"><h3>Download</h3><p>Click Download, then unzip AimTrainer.zip anywhere, like your Desktop.</p></div>
+      <div class="step reveal"><h3>Open it</h3><p>Double-click AimTrainer.exe. Nothing to install. If Windows warns you, click <b>More info → Run anyway</b>.</p></div>
+      <div class="step reveal"><h3>Set your sens</h3><p>Enter a name and your mouse DPI, pick your game and type your in-game sensitivity. Then go.</p></div>
+    </div>
+    <div style="margin-top:40px" class="reveal">
+      <details><summary>Why does Windows say "Windows protected your PC"?</summary>
+        <p>Windows shows that for apps that aren't code-signed, which costs hundreds of dollars a year. The app's full source code is public on GitHub. Click "More info", then "Run anyway".</p></details>
+      <details><summary>How do I find my mouse DPI?</summary>
+        <p>Open your mouse software (Logitech G Hub, Razer Synapse, SteelSeries GG and so on). Most gaming mice ship at 800 or 1600 DPI. DPI only changes the cm/360 number shown; your aim already feels the same as in-game.</p></details>
+      <details><summary>Does it work on Mac or phones?</summary>
+        <p>The app is Windows 10 and 11 only. The leaderboard works on any device.</p></details>
+      <details><summary>How do I get on the leaderboard?</summary>
+        <p>Record your round (Xbox Game Bar: Win+Alt+R, or Medal), copy the score code from the results screen, then log in with Discord on the leaderboard and submit it with the clip.</p></details>
+      <details><summary>Is it free?</summary>
+        <p>Yes, completely. No ads, no account needed to play.</p></details>
+    </div>
+  </div>
+</section>
+
+<section id="changelog">
+  <div class="wrap">
+    <div class="section-head reveal">
+      <span class="eyebrow">Updates</span>
+      <h2>What's new.</h2>
+    </div>
+    <div class="changelog" id="releases"><p class="muted">Loading updates…</p></div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap cta reveal">
+    <h2>Stop guessing your sens.</h2>
+    <p class="lead">Free, under 100 KB, and it updates itself.</p>
+    <a class="btn primary btn-download dl-link" href="#">Download free</a>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <span>Aim Trainer · made by THATLMG</span>
+    <span><a href="https://github.com/THATLMG/aim-trainer">Source on GitHub</a> · <a href="board.html">Leaderboard</a></span>
+  </div>
+</footer>
+
+<script src="config.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
+<script src="common.js"></script>
+<script>
+document.documentElement.classList.add("js");
+
+// ---------- download buttons: one click, always the newest zip ----------
+document.querySelectorAll(".dl-link").forEach(a => a.href = DOWNLOAD_URL);
+releases().then(rs => {
+  if (!rs.length) return;
+  const r = rs[0], zip = (r.assets || []).find(a => a.name === "AimTrainer.zip");
+  $("dl-meta").innerHTML = "";
+  $("dl-meta").append(el("b", { text: r.tag_name }), " · Windows 10/11 · " + (zip ? Math.round(zip.size / 1024) + " KB" : "tiny download") + " · no install needed");
+  const box = $("releases"); box.textContent = "";
+  for (const rel of rs.slice(0, 6)) {
+    box.append(el("div", { class: "release reveal" }, [
+      el("div", {}, [el("div", { class: "ver", text: rel.tag_name }), el("div", { class: "date", text: fmtDate(rel.published_at) })]),
+      el("div", { class: "body" }, [el("div", { text: (rel.name || "").replace(/^v[\d.]+:\s*/, ""), style: "font-weight:600;color:var(--text);margin-bottom:4px" }), renderNotes(rel.body)])
+    ]));
+  }
+  observe(box.querySelectorAll(".reveal"));
+});
+
+// ---------- games ----------
+for (const id in GAMES) {
+  const g = GAMES[id];
+  $("game-list").append(el("div", { class: "game", style: "--c:" + g.color }, [el("i"), el("b", { text: g.name }), el("span", { text: g.tag })]));
+}
+
+// ---------- latest verified runs ----------
+(async () => {
+  const box = $("recent");
+  if (!configured()) { box.textContent = ""; box.append(el("p", { class: "muted", text: "The leaderboard opens soon. Download the app and start practising now." })); return; }
+  const sb = window.supabase.createClient(CFG.supabaseUrl, CFG.supabaseKey);
+  const { data } = await sb.from("scores").select("*, profiles(username, avatar_url)").eq("status", "verified").order("reviewed_at", { ascending: false }).limit(6);
+  box.textContent = "";
+  if (!data || !data.length) { box.append(el("div", { class: "empty" }, [el("b", { text: "No verified runs yet" }), el("span", { text: "Be the first. Submit a run with a clip on the leaderboard." })])); return; }
+  const t = el("table"), tb = el("tbody");
+  t.append(el("thead", {}, [el("tr", {}, ["Player", "Run", "Score", "Date"].map(h => el("th", { text: h })))]), tb);
+  for (const s of data) tb.append(el("tr", {}, [
+    el("td", {}, [el("a", { class: "player", href: "board.html#player-" + s.user_id }, [avatar(s.profiles), el("span", { text: (s.profiles && s.profiles.username) || "Player" })])]),
+    el("td", { text: boardName(s.game, s.mode, s.diff) }),
+    el("td", { class: "score", text: fmtScore(s.mode, s.score) }),
+    el("td", { class: "date", text: fmtDate(s.played_at) })]));
+  box.append(el("div", { class: "tablewrap" }, [t]));
+})();
+
+// ---------- reveal on scroll ----------
+const io = "IntersectionObserver" in window ? new IntersectionObserver(es => es.forEach(e => { if (e.isIntersecting) { e.target.classList.remove("pending"); io.unobserve(e.target); } }), { threshold: .12 }) : null;
+function observe(nodes) {
+  nodes.forEach(n => {
+    if (!io) return;
+    const r = n.getBoundingClientRect();
+    if (r.top < innerHeight) return;            // already on screen: leave it visible
+    n.classList.add("pending"); io.observe(n);
+  });
+}
+observe(document.querySelectorAll(".reveal"));
+
+// ---------- playable bot demo ----------
+(() => {
+  const cv = $("demo-canvas"), ctx = cv.getContext("2d");
+  let W = 0, H = 0, dpr = 1, bots = [], marks = [], parts = [], mouse = { x: -99, y: -99 }, running = false, tLeft = 20, kills = 0, shots = 0, hits = 0, heads = 0, last = 0;
+  function size() { dpr = Math.min(2, devicePixelRatio || 1); const r = cv.getBoundingClientRect(); W = r.width; H = r.height; cv.width = W * dpr; cv.height = H * dpr; ctx.setTransform(dpr, 0, 0, dpr, 0, 0); }
+  addEventListener("resize", size); size();
+  function spawn() {
+    const sc = [1, .75, .55][Math.floor(Math.random() * 3)], u = H * .11 * sc;
+    const ground = H * (.55 + .4 * (sc - .55) / .45);
+    const b = { u, ground, x: u + Math.random() * (W - 2 * u), hp: 3, flash: 0, dead: 0, strafe: Math.random() < .6 };
+    b.origin = b.x; b.range = u * (2 + Math.random() * 3); b.vx = (Math.random() < .5 ? -1 : 1) * u * 3.4; b.t = .5 + Math.random();
+    bots.push(b);
+  }
+  function part(b) {
+    const ux = b.u, bodyTop = b.ground - 1.9 * ux, hr = .31 * ux, hc = bodyTop - .08 * ux - hr;
+    return { bodyTop, hr, hc };
+  }
+  function hit(b, x, y) {
+    const { bodyTop, hr, hc } = part(b), r = b.u / 2;
+    if ((x - b.x) ** 2 + (y - hc) ** 2 <= hr * hr) return 2;
+    if (Math.abs(x - b.x) <= r && y >= bodyTop + r && y <= b.ground - r) return 1;
+    if ((x - b.x) ** 2 + (y - bodyTop - r) ** 2 <= r * r || (x - b.x) ** 2 + (y - b.ground + r) ** 2 <= r * r) return 1;
+    return 0;
+  }
+  function shoot(x, y) {
+    if (!running) return;
+    shots++;
+    for (const b of [...bots].filter(b => !b.dead).sort((a, c) => c.u - a.u)) {
+      const p = hit(b, x, y);
+      if (!p) continue;
+      hits++; if (p === 2) heads++;
+      b.hp -= p === 2 ? 3 : 1; b.flash = .08;
+      marks.push({ x, y, t: .3, head: p === 2, text: p === 2 ? "HEADSHOT" : "" });
+      if (b.hp <= 0) {
+        b.dead = .25; kills++; $("demo-kills").textContent = kills;
+        for (let i = 0; i < 14; i++) parts.push({ x: b.x, y: b.ground - b.u, vx: (Math.random() - .5) * 320, vy: -Math.random() * 300, t: .6 });
+      }
+      return;
+    }
+    marks.push({ x, y, t: .15, miss: true });
+  }
+  function pos(e) { const r = cv.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; }
+  cv.addEventListener("pointermove", e => { mouse = pos(e); });
+  cv.addEventListener("pointerleave", () => { mouse = { x: -99, y: -99 }; });
+  cv.addEventListener("pointerdown", e => { const p = pos(e); mouse = p; shoot(p.x, p.y); });
+  function start() {
+    bots = []; marks = []; parts = []; kills = shots = hits = heads = 0; tLeft = 20; $("demo-kills").textContent = 0;
+    for (let i = 0; i < 4; i++) spawn();
+    $("demo-start").hidden = true; $("demo-end").hidden = true; running = true;
+  }
+  function end() {
+    running = false;
+    $("demo-result").textContent = kills + (kills === 1 ? " kill" : " kills");
+    $("demo-sub").textContent = (hits ? Math.round(heads / hits * 100) : 0) + "% headshots · " + (shots ? Math.round(hits / shots * 100) : 0) + "% accuracy. The real app matches your exact in-game sens.";
+    $("demo-end").hidden = false;
+  }
+  $("demo-go").onclick = start; $("demo-again").onclick = start;
+  function drawBot(b) {
+    const k = b.dead ? b.dead / .25 : 1, u = b.u * (.6 + .4 * k), { bodyTop: _bt } = part(b);
+    const bodyH = 1.9 * u, hr = .31 * u, bodyTop = b.ground - bodyH, hc = bodyTop - .08 * u - hr;
+    ctx.globalAlpha = k;
+    ctx.fillStyle = "rgba(0,0,0,.35)"; ctx.beginPath(); ctx.ellipse(b.x, b.ground, u * .6, u * .1, 0, 0, 7); ctx.fill();
+    const grad = ctx.createLinearGradient(b.x - u / 2, 0, b.x + u / 2, 0);
+    grad.addColorStop(0, "#5ff6f7"); grad.addColorStop(.55, "#19e6e8"); grad.addColorStop(1, "#0a8f9e");
+    ctx.fillStyle = b.flash > 0 ? "#fff" : grad;
+    ctx.beginPath(); ctx.roundRect(b.x - u / 2, bodyTop, u, bodyH, u / 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(b.x, hc, hr, 0, 7); ctx.fill();
+    if (!b.dead) {
+      const bw = u * .9, bh = Math.max(3, u * .07), seg = (bw - 4) / 3, y = hc - hr - bh - 6;
+      for (let i = 0; i < 3; i++) { ctx.fillStyle = i < b.hp ? "rgba(255,255,255,.95)" : "rgba(0,0,0,.4)"; ctx.fillRect(b.x - bw / 2 + i * (seg + 2), y, seg, bh); }
+    }
+    ctx.globalAlpha = 1;
+  }
+  function frame(t) {
+    const dt = Math.min(.05, (t - last) / 1000 || 0); last = t;
+    ctx.clearRect(0, 0, W, H);
+    // floor grid for depth
+    ctx.strokeStyle = "rgba(25,230,232,.07)"; ctx.lineWidth = 1;
+    for (let i = 0; i < 9; i++) { const y = H * .5 + (H * .5) * Math.pow(i / 8, 1.6); ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke(); }
+    for (let i = -6; i <= 6; i++) { ctx.beginPath(); ctx.moveTo(W / 2 + i * W * .03, H * .5); ctx.lineTo(W / 2 + i * W * .18, H); ctx.stroke(); }
+    if (running) { tLeft -= dt; if (tLeft <= 0) { tLeft = 0; end(); } $("demo-time").textContent = tLeft.toFixed(1); }
+    for (let i = bots.length - 1; i >= 0; i--) {
+      const b = bots[i];
+      if (b.dead) { b.dead -= dt; if (b.dead <= 0) { bots.splice(i, 1); if (running) spawn(); } continue; }
+      b.flash = Math.max(0, b.flash - dt);
+      if (b.strafe && running) {
+        b.t -= dt; const nx = b.x + b.vx * dt;
+        if (b.t <= 0 || Math.abs(nx - b.origin) > b.range || nx < b.u || nx > W - b.u) { b.vx = -b.vx; b.t = .4 + Math.random(); } else b.x = nx;
+      }
+    }
+    if (!bots.length && !running) for (let i = 0; i < 4; i++) spawn();   // idle scene behind the start screen
+    [...bots].sort((a, c) => a.u - c.u).forEach(drawBot);
+    for (let i = parts.length - 1; i >= 0; i--) { const p = parts[i]; p.t -= dt; p.vy += 900 * dt; p.x += p.vx * dt; p.y += p.vy * dt; if (p.t <= 0) { parts.splice(i, 1); continue; } ctx.fillStyle = "rgba(25,230,232," + p.t / .6 + ")"; ctx.fillRect(p.x, p.y, 4, 4); }
+    for (let i = marks.length - 1; i >= 0; i--) {
+      const m = marks[i]; m.t -= dt; if (m.t <= 0) { marks.splice(i, 1); continue; }
+      if (m.miss) continue;
+      ctx.strokeStyle = m.head ? "#ff4655" : "#fff"; ctx.lineWidth = 2;
+      for (const [dx, dy] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) { ctx.beginPath(); ctx.moveTo(m.x + dx * 6, m.y + dy * 6); ctx.lineTo(m.x + dx * 12, m.y + dy * 12); ctx.stroke(); }
+      if (m.text) { ctx.font = "700 14px 'Chakra Petch', sans-serif"; ctx.fillStyle = "rgba(255,70,85," + m.t / .3 + ")"; ctx.textAlign = "center"; ctx.fillText(m.text, m.x, m.y - 22 - (.3 - m.t) * 60); }
+    }
+    if (mouse.x > 0) {
+      const { x, y } = mouse;
+      ctx.lineWidth = 4; ctx.strokeStyle = "rgba(0,0,0,.7)";
+      const lines = [[x - 14, y, x - 4, y], [x + 4, y, x + 14, y], [x, y - 14, x, y - 4], [x, y + 4, x, y + 14]];
+      lines.forEach(l => { ctx.beginPath(); ctx.moveTo(l[0], l[1]); ctx.lineTo(l[2], l[3]); ctx.stroke(); });
+      ctx.lineWidth = 2; ctx.strokeStyle = "#fff"; lines.forEach(l => { ctx.beginPath(); ctx.moveTo(l[0], l[1]); ctx.lineTo(l[2], l[3]); ctx.stroke(); });
+    }
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
