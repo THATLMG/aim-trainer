@@ -151,7 +151,7 @@ class Trainer : Form
     const uint RID_INPUT = 0x10000003;
 
     const string TRK = "Tracking", FLK = "Flick", BOT = "Bots", RCT = "Reaction", FND = "Sens finder";
-    const string AppVersion = "1.2.1";
+    const string AppVersion = "1.3.0";
     const string Repo = "THATLMG/aim-trainer";
     static readonly string[] DiffNames = { "Easy", "Medium", "Hard", "Insane" };
     static readonly double[] BallR = { 0.045, 0.033, 0.024, 0.017 };
@@ -176,7 +176,7 @@ class Trainer : Form
     enum Scr { Setup, Home, Game, Play, Results }
     Scr scr = Scr.Home;
 
-    const string LeaderboardUrl = "https://claude.ai/artifact/2qWk4AinKqbFxrjk6AHboB";
+    const string LeaderboardUrl = "https://thatlmg.github.io/aim-trainer/board.html";
     const string CodeSecret = "aimtrainer-board-v1-7Qp2xK";   // must match the leaderboard page
 
     Dictionary<string, double[]> settings = new Dictionary<string, double[]>();

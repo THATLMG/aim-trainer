@@ -17,13 +17,13 @@ CONTROLS
 - Esc: stop a round or go back
 
 LEADERBOARD
-1. Ask the owner to share the leaderboard page with you (as Editor).
+1. Open the leaderboard and make a free account (username, email, password).
 2. Record your round (Xbox Game Bar: Win+Alt+R, or Medal).
 3. On the results screen, click "Copy score code".
 4. Open the leaderboard, go to "Submit a score", paste the code and add your
    clip. A mod will verify it.
 
-Leaderboard: https://claude.ai/artifact/2qWk4AinKqbFxrjk6AHboB
+Leaderboard: https://thatlmg.github.io/aim-trainer/board.html
 
 Needs Windows 10 or 11. Your scores and settings are saved in
 %APPDATA%\AimTrainer on your own PC.

@@ -167,7 +167,7 @@ function render() {
 function renderWho() {
   const w = $("who"); w.textContent = "";
   if (!AT.sb) return;
-  if (!AT.session) { w.append(el("button", { class: "btn small discord", text: "Log in with Discord", onclick: login })); return; }
+  if (!AT.session) { w.append(el("button", { class: "btn small primary", text: "Log in / Sign up", onclick: login })); return; }
   const p = AT.profile || {};
   w.append(el("span", { class: "userchip" }, [avatar(p), el("a", { href: "#player-" + AT.session.user.id, text: p.username || "You", style: "color:var(--text)" }), rolePill(p.role),
     el("button", { class: "btn small", text: "Log out", onclick: logout })]));
@@ -261,7 +261,7 @@ function updateSubmit() {
   const panel = $("submit-panel");
   const loggedOut = !AT.session;
   let gate = panel.querySelector(".gate");
-  if (loggedOut && configured() && !gate) panel.prepend(gate = el("div", { class: "msg gate" }, ["Log in to submit runs. ", el("button", { class: "btn small discord", text: "Log in with Discord", onclick: login })]));
+  if (loggedOut && configured() && !gate) panel.prepend(gate = el("div", { class: "msg gate" }, ["Log in to submit runs. ", el("button", { class: "btn small primary", text: "Log in / Sign up", onclick: login })]));
   if (!loggedOut && gate) gate.remove();
   const d = decodeCode($("code").value);
   $("submit-btn").disabled = !(d && !d.error && !scores.some(s => s.code === d.code) && clipReady() && AT.session && AT.profile && !AT.profile.banned && !busy);

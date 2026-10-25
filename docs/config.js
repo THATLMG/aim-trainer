@@ -3,5 +3,7 @@
 window.AT_CONFIG = {
   supabaseUrl: "",
   supabaseKey: "",
-  repo: "THATLMG/aim-trainer"
+  repo: "THATLMG/aim-trainer",
+  discordLogin: false   // set to true once Discord is set up in Supabase
+
 };

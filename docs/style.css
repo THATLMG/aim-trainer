@@ -251,5 +251,8 @@ input[type="url"], input[type="text"], select { width: 100%; background: var(--b
 .acts { display: flex; gap: 8px; flex-wrap: wrap; align-items: start; }
 .userchip { display: flex; align-items: center; gap: 10px; background: var(--panel); border: 1px solid var(--line); border-radius: 999px; padding: 4px 6px 4px 4px; font-size: 14px; }
 .userchip img { width: 28px; height: 28px; border-radius: 50%; }
+dialog.auth { border: 1px solid var(--line); border-radius: 16px; background: var(--panel); color: var(--text); padding: 24px; width: min(420px, calc(100vw - 32px)); }
+dialog.auth::backdrop { background: rgba(4, 6, 10, .72); backdrop-filter: blur(4px); }
+dialog.auth input { width: 100%; background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
 .banner { border: 1px solid rgba(255,211,78,.4); background: rgba(255,211,78,.07); border-radius: 12px; padding: 14px 16px; }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }

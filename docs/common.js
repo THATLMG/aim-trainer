@@ -116,9 +116,65 @@ async function loadProfile() {
     if (!data) await new Promise(r => setTimeout(r, 700));
   }
 }
-function login() {
+function loginDiscord() {
   const back = location.origin + location.pathname;
   AT.sb.auth.signInWithOAuth({ provider: "discord", options: { redirectTo: back } });
+}
+
+// Email + password sign-in, in a small dialog built on demand.
+function login() {
+  let dlg = $("auth-dialog");
+  if (!dlg) {
+    dlg = el("dialog", { id: "auth-dialog", class: "auth" });
+    document.body.append(dlg);
+  }
+  let mode = "in";
+  const draw = () => {
+    dlg.textContent = "";
+    const name = el("input", { type: "text", id: "auth-name", placeholder: "Username shown on the leaderboard", maxlength: "24", autocomplete: "username" });
+    const email = el("input", { type: "email", id: "auth-email", placeholder: "you@example.com", autocomplete: "email", required: "" });
+    const pass = el("input", { type: "password", id: "auth-pass", placeholder: mode === "up" ? "At least 6 characters" : "Password", minlength: "6", autocomplete: mode === "up" ? "new-password" : "current-password", required: "" });
+    const msg = el("div");
+    const form = el("form", { class: "stack", method: "dialog" }, [
+      el("div", { class: "row", style: "justify-content:space-between;align-items:center" }, [
+        el("h3", { text: mode === "up" ? "Create an account" : "Log in" }),
+        el("button", { type: "button", class: "btn small", text: "Close", onclick: () => dlg.close() })]),
+      mode === "up" ? el("label", { class: "stack", style: "gap:6px" }, [el("span", { class: "label", text: "Username" }), name]) : null,
+      el("label", { class: "stack", style: "gap:6px" }, [el("span", { class: "label", text: "Email" }), email]),
+      el("label", { class: "stack", style: "gap:6px" }, [el("span", { class: "label", text: "Password" }), pass]),
+      msg,
+      el("button", { type: "submit", class: "btn primary", text: mode === "up" ? "Create account" : "Log in" }),
+      CFG.discordLogin ? el("button", { type: "button", class: "btn discord", text: "Log in with Discord", onclick: loginDiscord }) : null,
+      el("p", { class: "muted", style: "margin:0;font-size:14px;text-align:center" }, [
+        mode === "up" ? "Already have an account? " : "New here? ",
+        el("a", { href: "#", text: mode === "up" ? "Log in" : "Create an account", onclick: e => { e.preventDefault(); mode = mode === "up" ? "in" : "up"; draw(); } })])
+    ]);
+    form.addEventListener("submit", async e => {
+      e.preventDefault();
+      const btn = form.querySelector('[type="submit"]');
+      btn.disabled = true; msg.textContent = "";
+      let res;
+      if (mode === "up") {
+        const n = name.value.trim();
+        if (n.length < 2) { msg.append(el("div", { class: "msg err", text: "Pick a username with at least 2 characters." })); btn.disabled = false; return; }
+        res = await AT.sb.auth.signUp({ email: email.value.trim(), password: pass.value, options: { data: { name: n } } });
+        if (!res.error && !res.data.session) {
+          msg.append(el("div", { class: "msg okm", text: "Account created. Check your email to confirm it, then log in." }));
+          btn.disabled = false; return;
+        }
+      } else res = await AT.sb.auth.signInWithPassword({ email: email.value.trim(), password: pass.value });
+      if (res.error) {
+        const t = /invalid login/i.test(res.error.message) ? "Wrong email or password." : /already registered/i.test(res.error.message) ? "That email already has an account. Log in instead." : res.error.message;
+        msg.append(el("div", { class: "msg err", text: t }));
+        btn.disabled = false; return;
+      }
+      dlg.close();
+    });
+    dlg.append(form);
+    setTimeout(() => (mode === "up" ? name : email).focus(), 0);
+  };
+  draw();
+  dlg.showModal();
 }
 async function logout() { await AT.sb.auth.signOut(); location.reload(); }
 const isStaff = () => !!AT.profile && !AT.profile.banned && (AT.profile.role === "owner" || AT.profile.role === "mod");
