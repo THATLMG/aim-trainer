@@ -194,7 +194,9 @@ function rolePill(role) {
   return null;
 }
 function statusPill(s) {
-  return el("span", { class: "pill " + (s === "verified" ? "ok" : s === "rejected" ? "no" : "wait"), text: s === "verified" ? "Verified" : s === "rejected" ? "Rejected" : "Pending" });
+  const map = { verified: ["ok", "✓ Verified"], rejected: ["no", "Rejected"], pending: ["wait", "In review"], unverified: ["none", "Unverified"] };
+  const [cls, text] = map[s] || map.unverified;
+  return el("span", { class: "pill " + cls, text });
 }
 function clipNode(row) {
   if (row.clip_path) { const v = el("video", { controls: "", preload: "metadata" }); v.src = clipUrl(row.clip_path); return v; }

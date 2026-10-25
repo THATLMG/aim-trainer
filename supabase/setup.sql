@@ -1,5 +1,6 @@
 -- Aim Trainer leaderboard database.
 -- Run this once in Supabase: SQL Editor > New query > paste everything > Run.
+-- Then run 002_optional_clips.sql the same way.
 -- Every write goes through the functions at the bottom, so the website can't be used to cheat
 -- around the rules (fake owner, editing other people's scores, skipping the score-code check).
 

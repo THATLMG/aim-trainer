@@ -186,6 +186,11 @@ details p { color: var(--muted); margin: 10px 0 0; max-width: 62em; }
 .pill.ok { color: var(--ok); border-color: rgba(61,220,132,.45); }
 .pill.wait { color: var(--wait); border-color: rgba(245,184,65,.45); }
 .pill.no { color: var(--bad); border-color: rgba(255,107,107,.45); }
+.pill.none { color: var(--muted); border-color: var(--line); }
+.verify-box { display: flex; gap: 12px; align-items: flex-start; border: 1px solid var(--line); border-radius: 12px; padding: 14px; background: var(--bg2); cursor: pointer; }
+.verify-box:has(input:checked) { border-color: rgba(61,220,132,.5); background: rgba(61,220,132,.06); }
+.verify-box input { accent-color: var(--ok); width: 18px; height: 18px; margin-top: 2px; flex: none; }
+.verify-box > span { display: grid; gap: 4px; font-size: 14.5px; }
 .pill.owner { color: #ffd34e; border-color: rgba(255,211,78,.45); }
 .pill.mod { color: var(--cyan); border-color: rgba(25,230,232,.45); }
 

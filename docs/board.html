@@ -56,13 +56,22 @@
   <section id="view-submit" style="padding:0" hidden>
     <div class="grid2">
       <div class="panel stack" id="submit-panel">
-        <div>
+        <div id="attach-banner" hidden></div>
+        <div id="code-step">
           <p class="label">1 · Paste your score code</p>
           <textarea class="code" id="code" placeholder="AIM1.xxxxxxxx.xxxxxxxx" spellcheck="false" aria-label="Score code"></textarea>
           <div id="preview" class="preview">After a round, click <b>Copy score code</b> on the results screen and paste it here.</div>
         </div>
-        <div>
-          <p class="label">2 · Add a clip of the run</p>
+        <div class="stack" style="gap:10px">
+          <p class="label" style="margin:0">2 · Verification (optional)</p>
+          <label class="verify-box" for="want-verify">
+            <input type="checkbox" id="want-verify">
+            <span><b>Yes, I have a video. Verify my run.</b>
+              <span class="muted">Verified runs get the ✓ Verified badge and show on the "Verified only" board. A mod reviews your clip within <b>1–3 business days</b>. Without a clip your run still ranks, marked Unverified.</span></span>
+          </label>
+        </div>
+        <div id="clip-step" hidden>
+          <p class="label">3 · Add your clip</p>
           <div class="seg" role="group" aria-label="Clip type">
             <button id="clip-upload" aria-pressed="true">Upload video</button>
             <button id="clip-link" aria-pressed="false">Paste a link</button>
@@ -83,9 +92,9 @@
           <p class="label">How it works</p>
           <ol class="muted" style="margin:0;padding-left:20px;display:grid;gap:6px">
             <li>Play Tracking, Flick, Bots or Reaction in the app.</li>
-            <li>Record the whole round and the results screen.</li>
-            <li>Copy the score code and submit it here with the clip.</li>
-            <li>A mod checks the clip and marks it Verified.</li>
+            <li>Copy the score code from the results screen and submit it here. It ranks right away as <b>Unverified</b>.</li>
+            <li>Want the ✓? Record the whole round and results screen, tick <b>Verify my run</b> and add the clip.</li>
+            <li>A mod checks it within 1–3 business days and marks it <b>Verified</b>.</li>
           </ol>
         </div>
         <div class="panel"><p class="label">Your runs</p><div id="mine"></div></div>
@@ -253,7 +262,12 @@ function updatePreview() {
   }
   updateSubmit();
 }
+// attachTo: an unverified run of yours that you're adding a clip to (null = a brand-new run)
+let attachTo = null;
+const wantVerify = () => attachTo != null || $("want-verify").checked;
+
 function clipReady() {
+  if (!wantVerify()) return true;
   if (clipKind === "upload") { const f = $("clip-file").files[0]; return !!f && f.size <= MAX_CLIP && /^video\/(mp4|webm)$/.test(f.type); }
   try { return new URL($("clip-url").value.trim()).protocol === "https:"; } catch { return false; }
 }
@@ -263,29 +277,48 @@ function updateSubmit() {
   let gate = panel.querySelector(".gate");
   if (loggedOut && configured() && !gate) panel.prepend(gate = el("div", { class: "msg gate" }, ["Log in to submit runs. ", el("button", { class: "btn small primary", text: "Log in / Sign up", onclick: login })]));
   if (!loggedOut && gate) gate.remove();
-  const d = decodeCode($("code").value);
-  $("submit-btn").disabled = !(d && !d.error && !scores.some(s => s.code === d.code) && clipReady() && AT.session && AT.profile && !AT.profile.banned && !busy);
+
+  const attaching = attachTo != null;
+  $("code-step").hidden = attaching;
+  $("want-verify").closest(".stack").hidden = attaching;
+  $("clip-step").hidden = !wantVerify();
+  const ab = $("attach-banner"); ab.hidden = !attaching; ab.textContent = "";
+  if (attaching) {
+    const s = scores.find(x => x.id === attachTo);
+    ab.append(el("div", { class: "msg" }, ["Adding a clip to your ", el("b", { text: s ? boardName(s.game, s.mode, s.diff) + " run (" + fmtScore(s.mode, s.score) + ")" : "run" }),
+      ". A mod reviews it within 1–3 business days. ", el("a", { href: "#", text: "Cancel", onclick: e => { e.preventDefault(); attachTo = null; updateSubmit(); } })]));
+  }
+
+  const ok = attaching || (() => { const d = decodeCode($("code").value); return d && !d.error && !scores.some(s => s.code === d.code); })();
+  const btn = $("submit-btn");
+  btn.textContent = attaching ? "Send for verification" : wantVerify() ? "Submit run for verification" : "Submit run";
+  btn.disabled = !(ok && clipReady() && AT.session && AT.profile && !AT.profile.banned && !busy);
 }
 async function submit() {
-  const d = decodeCode($("code").value);
-  if (!d || d.error || busy) return;
+  const attaching = attachTo != null, verify = wantVerify();
+  const d = attaching ? null : decodeCode($("code").value);
+  if (busy || (!attaching && (!d || d.error))) return;
   busy = true; updateSubmit();
   const msg = $("submit-msg"); msg.textContent = "";
-  msg.append(el("div", { class: "msg", text: clipKind === "upload" ? "Uploading clip…" : "Saving…" }));
+  msg.append(el("div", { class: "msg", text: verify && clipKind === "upload" ? "Uploading clip…" : "Saving…" }));
   let path = null;
   try {
     let url = null;
-    if (clipKind === "upload") {
+    if (verify && clipKind === "upload") {
       const f = $("clip-file").files[0];
       path = AT.session.user.id + "/" + Date.now() + (f.type === "video/webm" ? ".webm" : ".mp4");
       const up = await AT.sb.storage.from("clips").upload(path, f, { contentType: f.type });
       if (up.error) throw up.error;
-    } else url = $("clip-url").value.trim();
-    const r = await AT.sb.rpc("submit_score", { p_code: d.code, p_clip_url: url, p_clip_path: path });
+    } else if (verify) url = $("clip-url").value.trim();
+    const r = attaching
+      ? await AT.sb.rpc("add_clip", { p_id: attachTo, p_clip_url: url, p_clip_path: path })
+      : await AT.sb.rpc("submit_score", { p_code: d.code, p_clip_url: url, p_clip_path: path });
     if (r.error) throw r.error;
     msg.textContent = "";
-    msg.append(el("div", { class: "msg okm", text: "Submitted! It shows as Pending until a mod checks the clip." }));
-    $("code").value = ""; $("clip-file").value = ""; $("clip-url").value = "";
+    msg.append(el("div", { class: "msg okm", text: verify
+      ? "Sent for verification! It's on the leaderboard now and gets the ✓ Verified badge once a mod checks your clip (1–3 business days)."
+      : "Submitted! Your run is on the leaderboard as Unverified. Add a clip anytime from Your runs to get it verified." }));
+    $("code").value = ""; $("clip-file").value = ""; $("clip-url").value = ""; $("want-verify").checked = false; attachTo = null;
     await load(); updatePreview();
   } catch (e) {
     if (path) await AT.sb.storage.from("clips").remove([path]);
@@ -298,11 +331,17 @@ function renderMine() {
   const box = $("mine"); box.textContent = "";
   const mine = AT.session ? scores.filter(s => s.user_id === AT.session.user.id) : [];
   if (!mine.length) { box.append(el("p", { class: "muted", text: "Nothing yet. Your runs and their review status show up here." })); return; }
-  for (const s of mine) box.append(el("div", { class: "listrow" }, [
-    el("div", {}, [el("div", { text: boardName(s.game, s.mode, s.diff) }), el("div", { class: "muted", style: "font-size:14px", text: fmtScore(s.mode, s.score) + " · " + fmtDate(s.played_at) })]),
-    el("div", { class: "acts" }, [statusPill(s.status), el("button", { class: "btn small no", text: "Delete", onclick: e => removeScore(s, e.target) })])
-  ]));
+  for (const s of mine) {
+    const acts = el("div", { class: "acts" }, [statusPill(s.status)]);
+    if (s.status === "unverified")
+      acts.append(el("button", { class: "btn small ok", text: "Get verified", onclick: () => { attachTo = s.id; $("submit-msg").textContent = ""; updateSubmit(); $("submit-panel").scrollIntoView({ behavior: "smooth", block: "start" }); } }));
+    acts.append(el("button", { class: "btn small no", text: "Delete", onclick: e => removeScore(s, e.target) }));
+    box.append(el("div", { class: "listrow" }, [
+      el("div", {}, [el("div", { text: boardName(s.game, s.mode, s.diff) }), el("div", { class: "muted", style: "font-size:14px", text: fmtScore(s.mode, s.score) + " · " + fmtDate(s.played_at) })]),
+      acts]));
+  }
 }
+$("want-verify").addEventListener("change", updateSubmit);
 async function removeScore(s, btn) {
   btn.disabled = true;
   const r = await AT.sb.rpc("delete_score", { p_id: s.id });
@@ -335,7 +374,7 @@ function renderReview() {
   const box = $("review-list"); box.textContent = "";
   if (!isStaff()) { box.append(el("p", { class: "muted", text: "Only mods and the owner can review runs." })); return; }
   const pending = scores.filter(s => s.status === "pending").sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
-  const done = scores.filter(s => s.status !== "pending").sort((a, b) => new Date(b.reviewed_at || 0) - new Date(a.reviewed_at || 0)).slice(0, 15);
+  const done = scores.filter(s => s.status === "verified" || s.status === "rejected").sort((a, b) => new Date(b.reviewed_at || 0) - new Date(a.reviewed_at || 0)).slice(0, 15);
   box.append(el("p", { class: "label", text: pending.length ? pending.length + " waiting for review" : "All caught up" }));
   if (!pending.length && !done.length) { box.append(el("div", { class: "empty" }, [el("b", { text: "Nothing to review" }), el("span", { text: "New runs show up here." })])); return; }
   if (done.length) pending.push(...done);

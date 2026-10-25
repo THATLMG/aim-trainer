@@ -9,4 +9,4 @@
 !docs/
 !docs/**
 !supabase/
-!supabase/setup.sql
+!supabase/*.sql
