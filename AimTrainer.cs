@@ -1,4 +1,4 @@
-// Aim Trainer: tracking, flick and reaction practice with a sensitivity coach.
+// LMG's Aim Trainer: tracking, flick and reaction practice with a sensitivity coach.
 // Reads raw mouse movement so your in-game sensitivity can be matched.
 using System;
 using System.Collections.Generic;
@@ -176,7 +176,10 @@ class Trainer : Form
     enum Scr { Setup, Home, Game, Play, Results }
     Scr scr = Scr.Home;
 
-    const string LeaderboardUrl = "https://thatlmg.github.io/aim-trainer/board.html";
+    const string AppName = "LMG's Aim Trainer";
+    const string SiteUrl = "https://thatlmg.github.io/aim-trainer/";
+    const string LeaderboardUrl = SiteUrl + "board.html";
+    const string DiscordAppId = "";   // the Discord application named "LMG's Aim Trainer"
     const string CodeSecret = "aimtrainer-board-v1-7Qp2xK";   // must match the leaderboard page
 
     Dictionary<string, double[]> settings = new Dictionary<string, double[]>();
@@ -236,6 +239,11 @@ class Trainer : Form
     int musicCmd;
     System.Windows.Forms.Timer musicTimer = new System.Windows.Forms.Timer { Interval = 250 };
 
+    // Discord status: the UI thread writes these, the Discord thread sends them
+    volatile string rpcDetails = "", rpcState = "", rpcGame = "";
+    volatile bool discordOn = true, discordConnected;
+    static readonly long AppStart = (long)(DateTime.UtcNow - new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalSeconds;
+
     // updates and news
     string updVersion = "", updNotes = "", updUrl = "", updState = "";
     string newsId = "", newsText = "", seenNews = "";
@@ -259,7 +267,7 @@ class Trainer : Form
     public Trainer()
     {
         SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint | ControlStyles.OptimizedDoubleBuffer, true);
-        Text = "Aim Trainer";
+        Text = AppName;
         FormBorderStyle = FormBorderStyle.None;
         StartPosition = FormStartPosition.Manual;
         Bounds = Screen.FromPoint(Cursor.Position).Bounds;
@@ -322,8 +330,149 @@ class Trainer : Form
         t.Start();
         var mt = new Thread(MusicLoop) { IsBackground = true };
         mt.Start();
-        musicTimer.Tick += delegate { if (scr != Scr.Play && scr != Scr.Setup && MusicVisible) Invalidate(); };
+        musicTimer.Tick += delegate
+        {
+            UpdatePresenceText();
+            if (scr != Scr.Play && scr != Scr.Setup && MusicVisible) Invalidate();
+        };
         musicTimer.Start();
+        var dt = new Thread(DiscordLoop) { IsBackground = true };
+        dt.Start();
+    }
+
+    // ---------- Discord status (Rich Presence over Discord's local pipe) ----------
+    void UpdatePresenceText()
+    {
+        string d, s = "", g = "";
+        string run = game == null ? "" : playMode == FND ? game.Name + " · Sens finder"
+            : playMode == RCT ? game.Name + " · Reaction test"
+            : game.Name + " · " + playMode + " · " + DiffNames[playDiff];
+        if (scr == Scr.Setup) d = "Setting up";
+        else if (scr == Scr.Home || game == null) d = "In the menus";
+        else if (scr == Scr.Game) { d = game.Name + " · choosing a mode"; s = "Sens " + game.Fmt(Sens(game)); g = game.Id; }
+        else if (scr == Scr.Play)
+        {
+            d = run; g = game.Id;
+            if (countdown > 0) s = "Get ready…";
+            else if (playMode == FLK) s = hits + " hits · " + (hits + misses > 0 ? hits * 100 / (hits + misses) : 0) + "% accuracy";
+            else if (playMode == BOT) s = kills + " kills · " + (botHits > 0 ? headHits * 100 / botHits : 0) + "% headshots";
+            else if (playMode == RCT) s = "Try " + Math.Min(5, rTimes.Count + 1) + " of 5";
+            else if (playMode == FND) s = "Round " + Math.Min(5, fIdx + 1) + " of 5";
+            else s = (totTime > 0 ? (onTime / totTime * 100).ToString("0") : "0") + "% on target";
+        }
+        else
+        {
+            d = run + " · results"; g = game.Id;
+            s = playMode == TRK ? resMain + " on target" : playMode == FLK ? resMain + " hits" : playMode == BOT ? resMain + " kills"
+              : playMode == RCT ? resMain + " average" : "Best sens " + resMain;
+        }
+        rpcDetails = d; rpcState = s; rpcGame = g;
+    }
+
+    string ActivityJson()
+    {
+        Func<string, string> fit = t => t.Length > 128 ? t.Substring(0, 127) + "…" : t;
+        var assets = new Dictionary<string, object> { { "large_image", SiteUrl + "rpc/logo.png" }, { "large_text", AppName + " v" + AppVersion } };
+        string g = rpcGame;
+        if (g != "") { assets["small_image"] = SiteUrl + "rpc/" + g + ".png"; assets["small_text"] = games.First(x => x.Id == g).Name; }
+        var act = new Dictionary<string, object>
+        {
+            { "details", fit(rpcDetails) },
+            { "timestamps", new Dictionary<string, object> { { "start", AppStart } } },
+            { "assets", assets },
+            { "buttons", new object[] {
+                new Dictionary<string, object> { { "label", "Get LMG's Aim Trainer" }, { "url", SiteUrl } },
+                new Dictionary<string, object> { { "label", "Leaderboard" }, { "url", LeaderboardUrl } } } }
+        };
+        if (rpcState.Length >= 2) act["state"] = fit(rpcState);
+        return new JavaScriptSerializer().Serialize(act);
+    }
+
+    void DiscordLoop()
+    {
+        System.IO.Pipes.NamedPipeClientStream pipe = null;
+        string lastSent = null;
+        DateTime lastAt = DateTime.MinValue;
+        var js = new JavaScriptSerializer();
+        int pid = Process.GetCurrentProcess().Id;
+        while (true)
+        {
+            try
+            {
+                if (!discordOn || DiscordAppId == "")
+                {
+                    if (pipe != null) { try { RpcSend(pipe, 1, "{\"cmd\":\"SET_ACTIVITY\",\"args\":{\"pid\":" + pid + "},\"nonce\":\"" + Guid.NewGuid() + "\"}"); RpcRead(pipe); } catch { } pipe.Dispose(); pipe = null; }
+                    discordConnected = false; lastSent = null;
+                    Thread.Sleep(1000);
+                    continue;
+                }
+                if (pipe == null)
+                {
+                    pipe = RpcConnect();
+                    discordConnected = pipe != null;
+                    lastSent = null;
+                    if (pipe == null) { Thread.Sleep(15000); continue; }   // Discord isn't running; check again later
+                }
+                string act = ActivityJson();
+                // Discord allows about 5 updates per 20 seconds, so send at most every 4 seconds.
+                if (act != lastSent && (DateTime.UtcNow - lastAt).TotalSeconds >= 4)
+                {
+                    RpcSend(pipe, 1, "{\"cmd\":\"SET_ACTIVITY\",\"args\":{\"pid\":" + pid + ",\"activity\":" + act + "},\"nonce\":\"" + Guid.NewGuid() + "\"}");
+                    RpcRead(pipe);
+                    lastSent = act; lastAt = DateTime.UtcNow;
+                }
+            }
+            catch
+            {
+                try { if (pipe != null) pipe.Dispose(); } catch { }
+                pipe = null; discordConnected = false;
+                Thread.Sleep(5000);
+            }
+            Thread.Sleep(1000);
+        }
+    }
+
+    static System.IO.Pipes.NamedPipeClientStream RpcConnect()
+    {
+        for (int i = 0; i < 10; i++)
+        {
+            var p = new System.IO.Pipes.NamedPipeClientStream(".", "discord-ipc-" + i, System.IO.Pipes.PipeDirection.InOut);
+            try
+            {
+                p.Connect(250);
+                RpcSend(p, 0, "{\"v\":1,\"client_id\":\"" + DiscordAppId + "\"}");
+                if (RpcRead(p).Contains("READY")) return p;
+            }
+            catch { }
+            p.Dispose();
+        }
+        return null;
+    }
+
+    // Discord's frame format: 4-byte opcode, 4-byte length, then UTF-8 JSON.
+    static void RpcSend(Stream s, int op, string json)
+    {
+        byte[] body = System.Text.Encoding.UTF8.GetBytes(json), head = new byte[8];
+        BitConverter.GetBytes(op).CopyTo(head, 0);
+        BitConverter.GetBytes(body.Length).CopyTo(head, 4);
+        s.Write(head, 0, 8); s.Write(body, 0, body.Length); s.Flush();
+    }
+
+    static string RpcRead(Stream s)
+    {
+        byte[] head = ReadExact(s, 8);
+        int op = BitConverter.ToInt32(head, 0), len = BitConverter.ToInt32(head, 4);
+        string body = System.Text.Encoding.UTF8.GetString(ReadExact(s, len));
+        if (op == 2) throw new IOException("Discord closed the connection: " + body);
+        return body;
+    }
+
+    static byte[] ReadExact(Stream s, int n)
+    {
+        var buf = new byte[n];
+        int got = 0;
+        while (got < n) { int r = s.Read(buf, got, n - got); if (r <= 0) throw new IOException("pipe closed"); got += r; }
+        return buf;
     }
 
     // ---------- music ----------
@@ -604,6 +753,7 @@ class Trainer : Form
                 if (p[0] == "N" && p.Length >= 2) seenNews = p[1];
                 if (p[0] == "M" && p.Length >= 2) musicOn = p[1] == "1";
                 if (p[0] == "M2" && p.Length >= 2) lyricsInRound = p[1] == "1";
+                if (p[0] == "D" && p.Length >= 2) discordOn = p[1] == "1";
                 if (p[0] == "S" && p.Length >= 4) settings[p[1]] = new[] { double.Parse(p[2], ci), double.Parse(p[3], ci) };
                 if (p[0] == "R" && p.Length >= 6)
                     recs.Add(new Rec { Game = p[1], Mode = p[2], Diff = int.Parse(p[3], ci), Score = double.Parse(p[4], ci), When = DateTime.Parse(p[5], ci) });
@@ -622,6 +772,7 @@ class Trainer : Form
             if (seenNews != "") lines.Add("N\t" + seenNews.Replace("\t", " "));
             lines.Add("M\t" + (musicOn ? "1" : "0"));
             lines.Add("M2\t" + (lyricsInRound ? "1" : "0"));
+            lines.Add("D\t" + (discordOn ? "1" : "0"));
             foreach (var kv in settings) lines.Add(string.Format(ci, "S\t{0}\t{1}\t{2}", kv.Key, kv.Value[0], kv.Value[1]));
             foreach (var r in recs) lines.Add(string.Format(ci, "R\t{0}\t{1}\t{2}\t{3}\t{4:yyyy-MM-dd HH:mm}", r.Game, r.Mode, r.Diff, r.Score, r.When));
             Directory.CreateDirectory(Path.GetDirectoryName(dataPath));
@@ -1680,7 +1831,7 @@ class Trainer : Form
         var r = new RectangleF((W - pw) / 2, (H - ph) / 2, pw, ph);
         FillRound(g, Panel, r, P(14));
         float x = r.X + P(32), y = r.Y, w = pw - P(64);
-        DrawT(g, first ? "WELCOME TO AIM TRAINER" : "YOUR PROFILE", fLabel, Accent, x, y + P(30));
+        DrawT(g, first ? "WELCOME TO " + AppName.ToUpper() : "YOUR PROFILE", fLabel, Accent, x, y + P(30));
         DrawT(g, first ? "Let's set you up" : "Edit your profile", fH2, TextC, x - P(2), y + P(52));
         DrawT(g, "Player name", fSmall, TextC, x, y + P(108));
         Place(nameBox, x, y + P(132), w);
@@ -1698,11 +1849,14 @@ class Trainer : Form
     {
         float W = ClientSize.Width, H = ClientSize.Height, m = P(48);
         g.Clear(UiBg);
-        DrawT(g, "AIM TRAINER", fTitle, TextC, m, m);
+        DrawT(g, AppName.ToUpper(), fTitle, TextC, m, m);
         DrawT(g, "Playing as " + playerName + "  ·  " + globalDpi + " DPI.  Pick the game you want to practise for.", fBody, Muted, m + 2, m + P(56));
         AddBtn(g, new RectangleF(W - m - P(100), m, P(100), P(40)), "Exit", Close, false, false);
         AddBtn(g, new RectangleF(W - m - P(270), m, P(160), P(40)), "Leaderboard", OpenLeaderboard, false, false);
         AddBtn(g, new RectangleF(W - m - P(420), m, P(140), P(40)), "Edit profile", GoSetup, false, false);
+        if (DiscordAppId != "")
+            AddBtn(g, new RectangleF(W - m - P(700), m, P(130), P(40)), "Discord: " + (discordOn ? "On" : "Off"),
+                () => { discordOn = !discordOn; Save(); }, false, discordOn);
         if (!musicDead)
             AddBtn(g, new RectangleF(W - m - P(560), m, P(130), P(40)), "Music: " + (musicOn ? "On" : "Off"),
                 () => { musicOn = !musicOn; if (!musicOn) lyricsOpen = false; Save(); }, false, musicOn);

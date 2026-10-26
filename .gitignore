@@ -10,3 +10,4 @@
 !docs/**
 !supabase/
 !supabase/*.sql
+!make-images.ps1

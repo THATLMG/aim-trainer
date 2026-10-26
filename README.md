@@ -1,4 +1,4 @@
-# Aim Trainer
+# LMG's Aim Trainer
 
 A small Windows aim trainer with game profiles for Minecraft, Roblox, CS2, Valorant, Fortnite, Overwatch 2 and Apex Legends.
 

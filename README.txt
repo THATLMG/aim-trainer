@@ -1,4 +1,4 @@
-AIM TRAINER
+LMG'S AIM TRAINER
 ===========
 
 Practise tracking, flicking and reaction time for Minecraft, Roblox, CS2,
