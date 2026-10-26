@@ -40,6 +40,15 @@ let gameId = store.get("lastGame", null), mode = TRK, diff = 1, rawInput = null;
 let calib = store.get("calib", null);   // { factor }
 const moveFactor = () => (rawInput === false && calib ? calib.factor : 1);
 let CAL = null;                         // calibration in progress
+// Optional mouse acceleration, same curve as the Windows app: speed in counts per ms at 800 DPI.
+let accelOn = store.get("accel", false), lastMoveAt = 0;
+function accelMult(mx, my, t) {
+  const dtMs = clamp(t - lastMoveAt, 1, 50);
+  lastMoveAt = t;
+  if (!accelOn || (!mx && !my)) return 1;
+  const speed = Math.hypot(mx, my) / dtMs * 800 / dpiOf(gameId);
+  return Math.min(2.5, 1 + .25 * speed);
+}
 
 const sensOf = id => (settings[id] && settings[id].sens) || GP[id].def;
 const dpiOf = id => (settings[id] && settings[id].dpi) || (profile ? profile.dpi : 800);
@@ -125,6 +134,7 @@ function renderGame() {
   $("sens-label").textContent = "In-game sensitivity" + (g.suffix ? " (" + g.suffix + ")" : "");
   $("sens").value = roundSens(gameId, sensOf(gameId));
   $("dpi").value = dpiOf(gameId);
+  $("accel").checked = accelOn;
   updateCm();
   const modes = $("modes"); modes.textContent = "";
   for (const m of [TRK, FLK, BOT, RCT, FND])
@@ -147,6 +157,7 @@ function saveSensInputs() {
   if (s > 0 && d >= 100 && d <= 50000) { settings[gameId] = { sens: s, dpi: Math.round(d) }; store.set("settings", settings); updateCm(); }
 }
 $("sens").addEventListener("input", saveSensInputs);
+$("accel").addEventListener("change", e => { accelOn = e.target.checked; store.set("accel", accelOn); });
 $("dpi").addEventListener("input", saveSensInputs);
 
 function renderProgress() {
@@ -236,8 +247,8 @@ async function lockPointer() {
 document.addEventListener("mousemove", e => {
   if (document.pointerLockElement !== cv) return;
   if (CAL) { if (CAL.phase === 2) CAL.units += e.movementX; return; }
-  const f = moveFactor();
-  dx += e.movementX * f; dy += e.movementY * f;
+  const f = moveFactor(), a = accelMult(e.movementX * f, e.movementY * f, e.timeStamp);
+  dx += e.movementX * f * a; dy += e.movementY * f * a;
 });
 document.addEventListener("pointerlockchange", () => {
   if (document.pointerLockElement !== cv && CAL && CAL.phase < 3) return endCalibration();

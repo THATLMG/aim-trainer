@@ -151,7 +151,7 @@ class Trainer : Form
     const uint RID_INPUT = 0x10000003;
 
     const string TRK = "Tracking", FLK = "Flick", BOT = "Bots", RCT = "Reaction", FND = "Sens finder";
-    const string AppVersion = "1.4.0";
+    const string AppVersion = "1.5.0";
     const string Repo = "THATLMG/aim-trainer";
     static readonly string[] DiffNames = { "Easy", "Medium", "Hard", "Insane" };
     static readonly double[] BallR = { 0.045, 0.033, 0.024, 0.017 };
@@ -242,6 +242,16 @@ class Trainer : Form
     // Discord status: the UI thread writes these, the Discord thread sends them
     volatile string rpcDetails = "", rpcState = "", rpcGame = "";
     volatile bool discordOn = true, discordConnected;
+
+    // Optional mouse acceleration: faster swipes travel further (similar to Windows' "Enhance pointer precision").
+    // Speed is measured in counts per millisecond at 800 DPI so the curve feels the same at any DPI.
+    bool accelOn = false;
+    double AccelMult(int mx, int my, double dt)
+    {
+        if (!accelOn || dt <= 0 || (mx == 0 && my == 0) || game == null) return 1;
+        double speed = Math.Sqrt(mx * mx + my * my) / (Math.Max(dt, 0.001) * 1000) * 800.0 / Dpi(game);
+        return Math.Min(2.5, 1 + 0.25 * speed);
+    }
     static readonly long AppStart = (long)(DateTime.UtcNow - new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalSeconds;
 
     // updates and news
@@ -754,6 +764,7 @@ class Trainer : Form
                 if (p[0] == "M" && p.Length >= 2) musicOn = p[1] == "1";
                 if (p[0] == "M2" && p.Length >= 2) lyricsInRound = p[1] == "1";
                 if (p[0] == "D" && p.Length >= 2) discordOn = p[1] == "1";
+                if (p[0] == "A" && p.Length >= 2) accelOn = p[1] == "1";
                 if (p[0] == "S" && p.Length >= 4) settings[p[1]] = new[] { double.Parse(p[2], ci), double.Parse(p[3], ci) };
                 if (p[0] == "R" && p.Length >= 6)
                     recs.Add(new Rec { Game = p[1], Mode = p[2], Diff = int.Parse(p[3], ci), Score = double.Parse(p[4], ci), When = DateTime.Parse(p[5], ci) });
@@ -773,6 +784,7 @@ class Trainer : Form
             lines.Add("M\t" + (musicOn ? "1" : "0"));
             lines.Add("M2\t" + (lyricsInRound ? "1" : "0"));
             lines.Add("D\t" + (discordOn ? "1" : "0"));
+            lines.Add("A\t" + (accelOn ? "1" : "0"));
             foreach (var kv in settings) lines.Add(string.Format(ci, "S\t{0}\t{1}\t{2}", kv.Key, kv.Value[0], kv.Value[1]));
             foreach (var r in recs) lines.Add(string.Format(ci, "R\t{0}\t{1}\t{2}\t{3}\t{4:yyyy-MM-dd HH:mm}", r.Game, r.Mode, r.Diff, r.Score, r.When));
             Directory.CreateDirectory(Path.GetDirectoryName(dataPath));
@@ -1074,8 +1086,9 @@ class Trainer : Form
         if (playMode != RCT)
         {
             float ox = cx, oy = cy;
-            cx = Math.Max(0, Math.Min(ClientSize.Width, cx + (float)(dx * pxPerCount)));
-            cy = Math.Max(0, Math.Min(ClientSize.Height, cy + (float)(dy * pxPerCount)));
+            double am = AccelMult(dx, dy, dt);
+            cx = Math.Max(0, Math.Min(ClientSize.Width, cx + (float)(dx * pxPerCount * am)));
+            cy = Math.Max(0, Math.Min(ClientSize.Height, cy + (float)(dy * pxPerCount * am)));
             moved = Math.Sqrt((cx - ox) * (cx - ox) + (cy - oy) * (cy - oy));
         }
 
@@ -1922,7 +1935,7 @@ class Trainer : Form
         float top = m + P(156);
 
         // settings
-        var sp = new RectangleF(m, top, P(330), P(340));
+        var sp = new RectangleF(m, top, P(330), P(410));
         FillRound(g, Panel, sp, P(12));
         DrawT(g, "YOUR SETTINGS", fLabel, Muted, sp.X + P(20), sp.Y + P(18));
         DrawT(g, "In-game sensitivity" + (game.Suffix != "" ? " (" + game.Suffix + ")" : ""), fSmall, TextC, sp.X + P(20), sp.Y + P(48));
@@ -1933,6 +1946,20 @@ class Trainer : Form
         DrawT(g, cm.ToString("0.0") + " cm", fH2, game.Accent, sp.X + P(18), sp.Y + P(206));
         DrawT(g, "of mouse movement for a full 360° turn", fSmall, Muted, sp.X + P(20), sp.Y + P(238));
         if (game.Note != "") DrawTW(g, game.Note, fSmall, Muted, new RectangleF(sp.X + P(20), sp.Y + P(268), sp.Width - P(40), P(60)));
+
+        // Mouse acceleration checkbox
+        var row = new RectangleF(sp.X + P(14), sp.Y + P(332), sp.Width - P(28), P(62));
+        bool rowHover = row.Contains(mouse);
+        if (rowHover) FillRound(g, PanelHi, row, P(8));
+        var box = new RectangleF(row.X + P(8), row.Y + P(10), P(20), P(20));
+        if (accelOn) FillRound(g, game.Accent, box, P(4));
+        DrawRound(g, accelOn ? game.Accent : Muted, box, P(4), P(1.5f));
+        if (accelOn)
+            using (var pen = new Pen(OnColor(game.Accent), P(2.5f)))
+                g.DrawLines(pen, new[] { new PointF(box.X + P(4), box.Y + P(10)), new PointF(box.X + P(8.5f), box.Y + P(14.5f)), new PointF(box.X + P(16), box.Y + P(5.5f)) });
+        DrawT(g, "Mouse acceleration", fBody, TextC, box.Right + P(10), row.Y + P(7));
+        DrawT(g, "Faster swipes travel further", fSmall, Muted, box.Right + P(11), row.Y + P(33));
+        AddHit(row, () => { accelOn = !accelOn; Save(); });
 
         // modes
         float x2 = sp.Right + P(28), w2 = W - x2 - m;
