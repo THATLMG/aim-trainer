@@ -183,11 +183,40 @@
       <details><summary>How do I find my mouse DPI?</summary>
         <p>Open your mouse software (Logitech G Hub, Razer Synapse, SteelSeries GG and so on). Most gaming mice ship at 800 or 1600 DPI. DPI only changes the cm/360 number shown; your aim already feels the same as in-game.</p></details>
       <details><summary>Does it work on Mac or phones?</summary>
-        <p>Yes. <a href="play.html">Play in your browser</a> on Mac, Chromebook or Linux, with all five modes, the sens coach and leaderboard submit. Use Chrome or Edge for exact sensitivity. A Mac app is on the way; the Windows app adds music, lyrics and Discord status.</p></details>
+        <p>Yes. <a href="play.html">Play in your browser</a> on Mac, Chromebook or Linux, with all five modes, the sens coach and leaderboard submit. Use Chrome or Edge for exact sensitivity. Or <a href="#mac">get the Mac app</a> for its own window and Discord status. The Windows app also adds music and lyrics.</p></details>
       <details><summary>How do I get on the leaderboard?</summary>
         <p>Copy the score code from the results screen, make a free account on the leaderboard and submit it. You rank right away as Unverified. To get the ✓ Verified badge, record the round (Xbox Game Bar: Win+Alt+R, or Medal) and add the clip; a mod reviews it within 1–3 business days.</p></details>
       <details><summary>Is it free?</summary>
         <p>Yes, completely. No ads, no account needed to play.</p></details>
+    </div>
+  </div>
+</section>
+
+<section id="mac">
+  <div class="wrap">
+    <div class="section-head reveal">
+      <span class="eyebrow">On a Mac</span>
+      <h2>Two ways to play on Mac.</h2>
+      <p class="lead">Jump in instantly in your browser, or get the Mac app for its own window and Discord status. Both use the same game, scores and leaderboard.</p>
+    </div>
+    <div class="features" style="grid-template-columns:repeat(2,minmax(0,1fr))">
+      <div class="feature reveal">
+        <span class="tag">Instant</span>
+        <h3>Play in your browser</h3>
+        <p>Nothing to install. Use Chrome or Edge for exact sensitivity.</p>
+        <div><a class="btn cyan" href="play.html">Play now</a></div>
+      </div>
+      <div class="feature reveal">
+        <span class="tag">Mac app · Apple Silicon &amp; Intel · macOS 11+</span>
+        <h3>LMG's Aim Trainer for Mac</h3>
+        <p>Its own window, Discord status, and an update notice when new versions drop.</p>
+        <div><a class="btn primary" href="https://github.com/THATLMG/aim-trainer/releases/latest/download/LMGs-Aim-Trainer-mac.dmg">Download for Mac (.dmg)</a></div>
+      </div>
+    </div>
+    <div class="steps" style="margin-top:16px">
+      <div class="step reveal"><h3>Install</h3><p>Open the .dmg and drag <b>LMG's Aim Trainer</b> into <b>Applications</b>.</p></div>
+      <div class="step reveal"><h3>Allow it once</h3><p>The first time, macOS says it can't verify the app. Open <b>System Settings → Privacy &amp; Security</b>, scroll down and click <b>Open Anyway</b>. You only do this once.</p></div>
+      <div class="step reveal"><h3>Calibrate your mouse</h3><p>Turn off <b>Pointer acceleration</b> (System Settings → Mouse → Advanced), then click <b>Calibrate mouse</b> on any game screen for exact sens.</p></div>
     </div>
   </div>
 </section>
@@ -230,10 +259,11 @@ if (!isWindows) {
   play.style.fontSize = ""; play.style.padding = "";
   play.parentNode.insertBefore(play, dl);
   dl.classList.remove("primary", "btn-download"); dl.style.alignSelf = "center";
-  $("cta-download-text").textContent = "Windows download";
+  $("cta-download-text").textContent = isMac ? "Get the Mac app" : "Windows download";
+  if (isMac) { dl.href = "#mac"; dl.classList.remove("dl-link"); }
   play.lastChild.textContent = isMac ? " Play now on your Mac" : " Play now in your browser";
   $("hero-eyebrow").textContent = isMac ? "Free · Plays on your Mac in the browser" : "Free · Plays in your browser";
-  $("platform-note").textContent = isMac ? "Works best in Chrome or Edge for exact sensitivity. A Mac app is on the way." : "Works best in Chrome or Edge for exact sensitivity.";
+  $("platform-note").textContent = isMac ? "Works best in Chrome or Edge for exact sensitivity. Prefer an app? Get the Mac app below." : "Works best in Chrome or Edge for exact sensitivity.";
 }
 
 // ---------- download buttons: one click, always the newest zip ----------
