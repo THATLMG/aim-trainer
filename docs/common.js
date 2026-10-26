@@ -13,7 +13,7 @@ const GAMES = {
   roblox:    { name: "Roblox", color: "#28a0ff", yaw: 0.025, dec: 2, tag: "Bigger, bouncy targets" },
   custom:    { name: "Custom", color: "#3cc4b0", yaw: 0.022, dec: 2, tag: "Any game with CS2-style sens" }
 };
-const MODES = { T: "Tracking", F: "Flick", B: "Bots", R: "Reaction" };
+const MODES = { T: "Tracking", H: "Health Track", F: "Flick", B: "Bots", R: "Reaction" };
 const DIFFS = ["Easy", "Medium", "Hard", "Insane"];
 const CODE_SECRET = "aimtrainer-board-v1-7Qp2xK";
 const MAX_CLIP = 20 * 1024 * 1024;
@@ -64,7 +64,7 @@ function decodeCode(raw) {
 const lowerBetter = mode => mode === "R";
 function fmtScore(mode, v) {
   v = +v;
-  return mode === "T" ? v.toFixed(1) + "%" : mode === "F" ? Math.round(v) + " hits" : mode === "B" ? Math.round(v) + " kills" : Math.round(v) + " ms";
+  return mode === "T" ? v.toFixed(1) + "%" : mode === "F" ? Math.round(v) + " hits" : (mode === "B" || mode === "H") ? Math.round(v) + " kills" : Math.round(v) + " ms";
 }
 function fmtSens(g, s) { const G = GAMES[g] || GAMES.custom; return (+s).toFixed(G.dec) + (G.suffix || ""); }
 function cm360(g, sens, dpi) {

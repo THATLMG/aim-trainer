@@ -58,6 +58,7 @@
   <section id="v-game" hidden style="padding:0" class="stack">
     <div class="row" style="justify-content:space-between;align-items:end">
       <div class="stack" style="gap:6px"><a href="#" id="to-home" class="muted">‹ All games</a><h2 id="game-name"></h2><span class="muted" id="game-tag"></span></div>
+      <button class="btn" id="open-loadout">Loadout · gun &amp; skins</button>
     </div>
     <div class="grid2">
       <div class="stack">
@@ -85,12 +86,25 @@
     </div>
   </section>
 
+  <!-- loadout -->
+  <section id="v-loadout" hidden style="padding:0" class="stack">
+    <div class="row" style="justify-content:space-between;align-items:end">
+      <div class="stack" style="gap:6px"><a href="#" id="loadout-back" class="muted">‹ Back</a><h2>Loadout</h2><span class="muted">Pick the gun and skin you see during Flick and Bots.</span></div>
+    </div>
+    <div class="panel gun-preview"><canvas id="gun-canvas"></canvas><div class="gun-label" id="gun-label"></div></div>
+    <div class="row" style="gap:28px;align-items:start">
+      <div><p class="label">Gun</p><div class="chips" id="gun-pick"></div></div>
+      <div><p class="label">Options</p><div class="chips" id="fx-options"></div></div>
+    </div>
+    <div><p class="label">Skins <span id="best-rank" style="margin-left:8px"></span></p><div class="skin-grid" id="skin-grid"></div></div>
+  </section>
+
   <!-- results -->
   <section id="v-results" hidden style="padding:0" class="stack">
     <span class="eyebrow" id="res-title"></span>
     <div class="grid2">
       <div class="stack">
-        <div class="row" style="align-items:center;gap:16px"><div class="res-main" id="res-main"></div><span class="pill ok" id="res-pb" hidden>New personal best</span></div>
+        <div class="row" style="align-items:center;gap:22px"><div class="res-main" id="res-main"></div><div class="rank-badge" id="res-rank" hidden></div><span class="pill ok" id="res-pb" hidden>New personal best</span></div>
         <div class="muted" id="res-label" style="margin-top:-10px"></div>
         <div class="stack" id="res-lines" style="gap:6px"></div>
         <div class="row"><button class="btn primary" id="again">Play again</button><button class="btn" id="back">Back</button></div>

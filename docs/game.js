@@ -14,10 +14,11 @@ const GP = {
   apex:      { hfov: 110, def: 2.0, hb: .7, size: 1, band: .6, bg: "#1a1515" },
   custom:    { hfov: 103, def: 1.0, hb: .6, size: 1, band: .8, bg: "#111a1a" }
 };
-const TRK = "Tracking", FLK = "Flick", BOT = "Bots", RCT = "Reaction", FND = "Sens finder";
-const LETTER = { Tracking: "T", Flick: "F", Bots: "B", Reaction: "R" };
+const TRK = "Tracking", FLK = "Flick", BOT = "Bots", RCT = "Reaction", FND = "Sens finder", HTK = "Health Track";
+const LETTER = { Tracking: "T", Flick: "F", Bots: "B", Reaction: "R", "Health Track": "H" };
 const MODE_DESC = {
   [TRK]: "Keep your crosshair on a moving ball. Score is the % of time on target.",
+  [HTK]: "No clicking: stay on the ball to drain its health. Kill it and a new one appears.",
   [FLK]: "Snap to targets as they pop up and click. 30 seconds.",
   [BOT]: "Strafing and standing bots with 3 HP. Headshots kill instantly.",
   [RCT]: "Click the moment the screen turns green. 5 tries.",
@@ -25,6 +26,7 @@ const MODE_DESC = {
 };
 const BallR = [.045, .033, .024, .017], BallSpeed = [.22, .36, .5, .65];
 const FlickR = [.042, .032, .024, .017], FlickMin = [.12, .16, .2, .25], FlickMax = [.28, .36, .45, .5], FlickTimeout = [0, 0, 1.6, 1.0];
+const DrainRate = [110, 80, 65, 55];   // health per second while your crosshair is on the ball
 const BotU = [.075, .06, .05, .04], BotShare = [.3, .5, .7, .85], BotSpd = [2.5, 3.5, 4.5, 6], BotCount = [2, 3, 4, 5];
 
 // ---------- saved data (this browser) ----------
@@ -85,13 +87,14 @@ function makeCode(letter, d, score) {
 }
 
 // ---------- views ----------
-const views = ["setup", "home", "game", "results"];
+const views = ["setup", "home", "game", "loadout", "results"];
 function show(v) {
   views.forEach(x => $("v-" + x).hidden = x !== v);
   $("stage").hidden = true;
   scrollTo(0, 0);
   if (v === "home") renderHome();
   if (v === "game") renderGame();
+  if (v === "loadout") renderLoadout();
 }
 
 function renderSetup() {
@@ -137,12 +140,12 @@ function renderGame() {
   $("accel").checked = accelOn;
   updateCm();
   const modes = $("modes"); modes.textContent = "";
-  for (const m of [TRK, FLK, BOT, RCT, FND])
+  for (const m of [TRK, HTK, FLK, BOT, RCT, FND])
     modes.append(el("button", { class: "mode-card", "aria-pressed": String(mode === m), style: "--c:" + g.color, onclick: () => { mode = m; renderGame(); } },
       [el("b", { text: m }), el("span", { text: MODE_DESC[m] })]));
   const dd = $("diffs"); dd.textContent = "";
   DIFFS.forEach((name, i) => dd.append(el("button", { class: "chip", "aria-pressed": String(diff === i), style: "--c:" + g.color, onclick: () => { diff = i; renderGame(); } }, [el("span", { text: name })])));
-  $("diff-wrap").hidden = !(mode === TRK || mode === FLK || mode === BOT);
+  $("diff-wrap").hidden = !(mode === TRK || mode === HTK || mode === FLK || mode === BOT);
   renderProgress();
 }
 function updateCm() {
@@ -173,7 +176,7 @@ function renderProgress() {
     el("div", {}, [el("div", { class: "muted", text: "Rounds" }), el("div", { class: "big", text: String(vals.length) })])]));
   box.append(spark(vals.slice(-20), GAMES[gameId].color));
 }
-function fmtRes(m, v) { return m === TRK ? v.toFixed(1) + "%" : m === FLK ? Math.round(v) + " hits" : m === BOT ? Math.round(v) + " kills" : Math.round(v) + " ms"; }
+function fmtRes(m, v) { return m === TRK ? v.toFixed(1) + "%" : m === FLK ? Math.round(v) + " hits" : m === BOT || m === HTK ? Math.round(v) + " kills" : Math.round(v) + " ms"; }
 function spark(vals, color) {
   const w = 600, h = 90, lo = Math.min(...vals), hi = Math.max(...vals), span = hi - lo || 1;
   const pts = vals.map((v, i) => [vals.length === 1 ? w / 2 : i / (vals.length - 1) * w, h - 8 - (v - lo) / span * (h - 16)]);
@@ -204,7 +207,8 @@ function prepare(m) {
   saveSensInputs();
   S = { mode: m, diff: m === FND ? 1 : diff, active: false, started: false, countdown: 0, time: 0, len: m === FND ? 10 : 30, mult: 1,
         hits: 0, misses: 0, expired: 0, hitTimes: [], progress: [], shots: 0, botHits: 0, headHits: 0, kills: 0, headKills: 0, ttk: [], bots: [], marks: [],
-        on: 0, tot: 0, leadSum: 0, leadTime: 0, crossPath: 0, ballPath: 0, rState: 0, rTimes: [], greenAt: 0, greenShown: 0, last: 0 };
+        on: 0, tot: 0, leadSum: 0, leadTime: 0, crossPath: 0, ballPath: 0, rState: 0, rTimes: [], greenAt: 0, greenShown: 0, last: 0,
+        hp: 100, htKills: 0, htTtk: [], htSpawn: 0, fx: [], floats: [], feed: [], combo: 0, bestCombo: 0, comboPop: 0, shake: 0, flash: 0, recoil: 0, muzzle: 0, sway: 0 };
   if (m === FND) { S.fMults = [.8, .9, 1, 1.1, 1.2].sort(() => R() - .5); S.fScores = []; S.fIdx = 0; S.mult = S.fMults[0]; }
   stage.hidden = false;
   stage.style.background = GP[gameId].bg;
@@ -346,6 +350,7 @@ function frame(t) {
     S.cx = clamp(S.cx + dx * S.ppc, 0, W); S.cy = clamp(S.cy + dy * S.ppc, 0, H);
     moved = Math.hypot(S.cx - ox, S.cy - oy);
   }
+  stepFx(dt, dx);
   dx = dy = 0;
   if (S.countdown > 0) {
     S.countdown -= dt;
@@ -353,6 +358,7 @@ function frame(t) {
       S.countdown = 0;
       if (S.mode === FLK) spawnTarget(now);
       if (S.mode === BOT) { S.bots.forEach(b => b.spawn = now); startPath(); }
+      if (S.mode === HTK) S.htSpawn = now;
     }
   } else if (dt > 0) step(dt, now, moved);
   if (!S.active) return;
@@ -364,6 +370,7 @@ function frame(t) {
 function step(dt, now, moved) {
   if (S.mode === RCT) { if (S.rState === 1 && now >= S.greenAt) { S.rState = 2; S.markGreen = true; } return; }
   if (S.mode === FLK) stepFlick(dt, now, moved);
+  else if (S.mode === HTK) stepHealth(dt, now, moved);
   else if (S.mode === BOT) stepBots(dt, now, moved);
   else stepTracking(dt, moved);
   S.time -= dt;
@@ -443,14 +450,19 @@ function stepFlick(dt, now, moved) {
     if (along > .3 * S.fd && S.peak > 0 && S.smooth < .15 * S.peak) { S.primary = true; if (S.fd > 3 * S.tr) S.progress.push(along / S.fd); }
   }
   const to = FlickTimeout[S.diff];
-  if (to > 0 && now - S.spawn > to) { S.expired++; spawnTarget(now); }
+  if (to > 0 && now - S.spawn > to) { S.expired++; S.combo = 0; spawnTarget(now); }
 }
 function flickClick(now) {
+  fire();
   if (hitShape(S.cx - S.tx, S.cy - S.ty, S.tr)) {
     S.hits++; S.hitTimes.push(now - S.spawn);
     if (!S.primary && S.fd > 3 * S.tr) S.progress.push(((S.cx - S.sx) * S.ux + (S.cy - S.sy) * S.uy) / S.fd);
+    burst(S.tx, S.ty, GAMES[gameId].color, 16, 380, .5);
+    addCombo();
+    if (now - S.spawn < .35) addFloat(S.tx, S.ty - S.tr - 10, "QUICK!", "#ffd34e");
+    sound(1);
     spawnTarget(now);
-  } else S.misses++;
+  } else { S.misses++; S.combo = 0; }
 }
 
 // bots
@@ -493,6 +505,7 @@ function botPart(b, px, py) {
 }
 function botClick(now) {
   S.shots++;
+  fire();
   for (const b of S.bots.filter(b => !b.dead).sort((p, q) => q.u - p.u)) {
     const part = botPart(b, S.cx, S.cy);
     if (!part) continue;
@@ -500,9 +513,18 @@ function botClick(now) {
     if (S.pathFresh) { analyzePath(S.cx, S.cy); S.pathFresh = false; }
     b.hp -= part === 2 ? 3 : 1; b.flash = .08;
     S.marks.push({ t: .12, head: part === 2 });
-    if (b.hp <= 0) { b.dead = .25; S.kills++; if (part === 2) S.headKills++; S.ttk.push(now - b.spawn); startPath(); }
+    burst(S.cx, S.cy, part === 2 ? "#ff5a5a" : "#19e6e8", part === 2 ? 10 : 6, 300, .35);
+    addCombo();
+    if (b.hp <= 0) {
+      b.dead = .25; S.kills++; if (part === 2) S.headKills++; S.ttk.push(now - b.spawn); startPath();
+      burst(b.x, b.ground - b.u, "#19e6e8", 30, 480, .7);
+      addFeed(part === 2 ? "Headshot kill" : "Kill", part === 2);
+      shake(part === 2 ? .16 : .1);
+      if (part === 2) { addFloat(S.cx, S.cy - 26, "HEADSHOT", "#ff4655"); S.flash = .08; sound(3); } else sound(2);
+    } else sound(1);
     return;
   }
+  S.combo = 0;
 }
 function startPath() { S.path = []; S.px0 = S.cx; S.py0 = S.cy; S.pathFresh = true; }
 function analyzePath(tx, ty) {
@@ -528,12 +550,157 @@ function reactionClick(now) {
   else { S.rState = 1; S.greenAt = now + 1.2 + R() * 3; }
 }
 
+// health track: tracking where staying on the ball drains its health
+function stepHealth(dt, now, moved) {
+  stepTracking(dt, moved);
+  const by = S.by + S.jumpOff;
+  if (!hitShape(S.cx - S.bx, S.cy - by, S.br)) return;
+  S.hp -= DrainRate[S.diff] * dt;
+  if (R() < dt * 30) burst(S.bx + (R() - .5) * S.br, by + (R() - .5) * S.br, GAMES[gameId].color, 1, 120, .25);
+  if (S.hp > 0) return;
+  S.htKills++; S.htTtk.push(now - S.htSpawn);
+  burst(S.bx, by, GAMES[gameId].color, 26, 420, .6); burst(S.bx, by, "#ffffff", 8, 260, .35);
+  addFeed("Target down" + (now - S.htSpawn < 1.2 ? "  ·  fast!" : ""), false);
+  shake(.12); sound(2); addCombo();
+  const a = S.arena, jh = GP[gameId].jumps ? H * .1 : 0;
+  S.hp = 100; S.htSpawn = now;
+  S.bx = a.x + S.br + R() * (a.w - 2 * S.br);
+  S.by = a.y + S.br + jh + R() * Math.max(1, a.h - 2 * S.br - jh);
+  S.jumpOff = S.jumpV = 0;
+  const ang = R() * Math.PI * 2; S.dirX = Math.cos(ang); S.dirY = Math.sin(ang); S.heading = ang;
+}
+
+// ---------- effects ----------
+let loadout = Object.assign({ gun: "warden", skin: "standard", showGun: true, sound: true, shake: true }, store.get("loadout", {}));
+let progressStore = Object.assign({ bestRank: -1, bestBotKills: 0 }, store.get("progress", {}));
+const saveLoadout = () => store.set("loadout", loadout);
+
+function burst(x, y, color, n, speed, life) {
+  for (let i = 0; i < n; i++) {
+    const a = R() * Math.PI * 2, sp = speed * (.3 + R() * .7);
+    S.fx.push({ x, y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - speed * .3, life, max: life, size: 2 + R() * 3, color });
+  }
+}
+const addFloat = (x, y, text, color) => S.floats.push({ x, y, text, color, life: .7 });
+function addFeed(text, head) { S.feed.unshift({ text, head, life: 3 }); if (S.feed.length > 5) S.feed.pop(); }
+const shake = t => { if (loadout.shake) S.shake = Math.max(S.shake, t); };
+function addCombo() { S.combo++; S.comboPop = 1; S.bestCombo = Math.max(S.bestCombo, S.combo); }
+function fire() { S.recoil = Math.min(1.4, S.recoil + 1); S.muzzle = .05; }
+function stepFx(dt, mdx) {
+  S.fx = S.fx.filter(p => { p.life -= dt; p.vy += 900 * dt; p.x += p.vx * dt; p.y += p.vy * dt; return p.life > 0; });
+  S.floats = S.floats.filter(f => { f.life -= dt; f.y -= 60 * dt; return f.life > 0; });
+  S.feed = S.feed.filter(f => (f.life -= dt) > 0);
+  S.comboPop = Math.max(0, S.comboPop - dt * 4); S.shake = Math.max(0, S.shake - dt); S.flash = Math.max(0, S.flash - dt);
+  S.recoil *= Math.pow(.0005, dt); S.muzzle = Math.max(0, S.muzzle - dt);
+  S.sway += (clamp(mdx, -40, 40) * .15 - S.sway) * Math.min(1, dt * 10);
+}
+let actx = null;
+function sound(kind) {   // 1 = hit, 2 = kill, 3 = headshot
+  if (!loadout.sound) return;
+  try {
+    actx = actx || new (window.AudioContext || window.webkitAudioContext)();
+    const [f0, f1, len, vol] = { 1: [1500, 1100, .04, .18], 2: [520, 980, .11, .28], 3: [2100, 1700, .16, .24] }[kind];
+    const o = actx.createOscillator(), g = actx.createGain(), t = actx.currentTime;
+    o.frequency.setValueAtTime(f0, t); o.frequency.linearRampToValueAtTime(f1, t + len);
+    g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(.001, t + len);
+    o.connect(g); g.connect(actx.destination); o.start(t); o.stop(t + len + .02);
+  } catch {}
+}
+
+// ---------- ranks ----------
+const RANKS = ["Iron", "Bronze", "Silver", "Gold", "Platinum", "Diamond", "Elite", "Champion"];
+const RANK_COLORS = ["#82848c", "#c48248", "#c4cedc", "#f4c43a", "#38d2c4", "#6eaaff", "#c860ff", "#ff4c5c"];
+function rankSteps(m, d) {
+  const k = [1.15, 1, .85, .7][d] || 1;
+  const t = m === TRK ? [25, 35, 45, 55, 65, 75, 85] : m === FLK ? [10, 16, 22, 28, 35, 42, 50] : m === BOT ? [5, 9, 13, 17, 22, 27, 33]
+    : m === HTK ? [2, 4, 6, 8, 10, 13, 16] : m === RCT ? [330, 290, 260, 235, 210, 190, 170] : null;
+  return !t ? null : m === RCT ? t : t.map(x => Math.round(x * k));
+}
+function rankIndex(m, d, score) {
+  const t = rankSteps(m, d); if (!t) return -1;
+  let r = 0; t.forEach((v, i) => { if (m === RCT ? score <= v : score >= v) r = i + 1; });
+  return r;
+}
+
+// ---------- gun skins ----------
+const SKINS = [
+  { id: "standard", name: "Standard", body: "#40444c", trim: "#22242a", glow: "#828892" },
+  { id: "neon", name: "Neon Pulse", body: "#12121a", trim: "#20202c", glow: "#19e6e8" },
+  { id: "arctic", name: "Arctic", body: "#dee8f0", trim: "#8ca0b6", glow: "#6ec4ff" },
+  { id: "crimson", name: "Crimson", body: "#7c121e", trim: "#3a0a10", glow: "#ff4655", botKills: 15, need: "Get 15 kills in one Bots round" },
+  { id: "dragon", name: "Dragon Fire", body: "#46100a", trim: "#220806", glow: "#ff8c28", rank: 3, need: "Reach Gold rank in any mode" },
+  { id: "glitch", name: "Glitch", body: "#1c0c2c", trim: "#0e0618", glow: "#ff3cdc", rank: 4, need: "Reach Platinum rank in any mode" },
+  { id: "gold", name: "Gold", body: "#cea038", trim: "#805e1a", glow: "#ffeeaa", rank: 5, need: "Reach Diamond rank in any mode" },
+  { id: "void", name: "Void", body: "#08080e", trim: "#040408", glow: "#aa5aff", rank: 7, need: "Reach Champion rank in any mode" }
+];
+const unlocked = s => (s.rank == null || progressStore.bestRank >= s.rank) && (!s.botKills || progressStore.bestBotKills >= s.botKills);
+const currentSkin = () => { const s = SKINS.find(x => x.id === loadout.skin); return s && unlocked(s) ? s : SKINS[0]; };
+function hexMix(a, b, t) {
+  const p = h => [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16)), x = p(a), y = p(b);
+  return "rgb(" + x.map((v, i) => Math.round(v + (y[i] - v) * t)).join(",") + ")";
+}
+function hexA(h, a) { const p = [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16)); return "rgba(" + p.join(",") + "," + a + ")"; }
+
+// Draws one of the two original guns pointing left, with the skin's colors and animated pattern.
+function drawGunModel(c, px, py, k, angle, t, s, gun, flash, hands) {
+  const kes = gun === "kestrel", muzzleX = kes ? -570 : -540, trim = hexMix(s.trim, "#969ca8", .22);
+  const poly = (pts, fill) => { c.beginPath(); pts.forEach(([x, y], i) => i ? c.lineTo(x, y) : c.moveTo(x, y)); c.closePath(); if (fill) { c.fillStyle = fill; c.fill(); } };
+  c.save(); c.translate(px, py); c.rotate(angle * Math.PI / 180); c.scale(k, k);
+  if (hands) { poly([[-330, 40], [-268, 36], [-140, 340], [-280, 340]], "#2c303a"); poly([[40, 90], [110, 70], [320, 300], [160, 340]], "#2c303a"); }
+  c.fillStyle = trim;
+  poly(kes ? [[-146, 38], [-92, 38], [-92, 152], [-146, 152]] : [[-152, 44], [-96, 44], [-74, 140], [-136, 154]], trim);
+  poly([[14, 38], [58, 38], [82, 126], [34, 132]], trim);
+  if (kes) { c.beginPath(); c.roundRect(-575, -24, 245, 46, 18); c.fill(); }
+  else { c.fillRect(-505, -12, 125, 18); c.fillRect(-545, -19, 45, 32); c.fillRect(-472, -38, 10, 26); }
+  c.fillRect(-132, -64, 144, 22);
+  const body = new Path2D();
+  const add = pts => { pts.forEach(([x, y], i) => i ? body.lineTo(x, y) : body.moveTo(x, y)); body.closePath(); };
+  add([[60, -34], [236, -48], [258, 46], [70, 34]]);
+  add(kes ? [[-214, -36], [72, -40], [82, 38], [-204, 40]] : [[-204, -44], [72, -44], [84, 40], [-192, 46]]);
+  if (kes) body.rect(-334, -28, 130, 54); else body.rect(-388, -32, 192, 62);
+  c.fillStyle = s.body; c.fill(body, "nonzero");
+  c.save(); c.clip(body, "nonzero"); skinPattern(c, s, t);
+  const shade = c.createLinearGradient(0, -50, 0, 50); shade.addColorStop(0, "rgba(255,255,255,.2)"); shade.addColorStop(1, "rgba(0,0,0,.32)");
+  c.fillStyle = shade; c.fillRect(-600, -60, 900, 120); c.restore();
+  c.strokeStyle = hexMix(s.trim, "#000000", .3); c.lineWidth = 3; c.stroke(body);
+  c.fillStyle = "rgba(0,0,0,.47)"; for (let i = 0; i < 5; i++) c.fillRect((kes ? -320 : -370) + i * 30, -10, 16, 6);
+  if (hands) { c.fillStyle = "#1c1e24"; c.beginPath(); c.ellipse(-297, 27, 55, 31, 0, 0, 7); c.fill(); c.beginPath(); c.ellipse(53, 98, 43, 48, 0, 0, 7); c.fill(); }
+  if (flash) {
+    c.beginPath();
+    for (let i = 0; i < 12; i++) { const a = i * Math.PI / 6, r = i % 2 ? 26 : 70; c.lineTo(muzzleX - 30 + Math.cos(a) * r * 1.4, -3 + Math.sin(a) * r); }
+    c.closePath(); c.fillStyle = "rgba(255,210,110,.9)"; c.fill();
+    c.fillStyle = "rgba(255,255,230,.95)"; c.beginPath(); c.ellipse(muzzleX - 30, -3, 22, 21, 0, 0, 7); c.fill();
+  }
+  c.restore();
+}
+function skinPattern(c, s, t) {
+  if (s.id === "neon") { c.strokeStyle = hexA(s.glow, (140 + 100 * Math.sin(t * 4)) / 255); c.lineWidth = 4; for (const y of [-22, 2, 24]) { c.beginPath(); c.moveTo(-400, y); c.lineTo(250, y - 6); c.stroke(); } }
+  else if (s.id === "arctic" || s.id === "crimson") { c.strokeStyle = s.id === "arctic" ? hexA(s.trim, .43) : hexA(s.glow, .67); c.lineWidth = 14; for (let x = -420; x < 300; x += 70) { c.beginPath(); c.moveTo(x, -60); c.lineTo(x + 60, 60); c.stroke(); } }
+  else if (s.id === "dragon") { const off = t * 140 % 200; for (let x = -420 + off - 200; x < 300; x += 200) { const g = c.createLinearGradient(x, 0, x + 100, -40); g.addColorStop(0, hexA(s.glow, .86)); g.addColorStop(1, "rgba(255,40,0,0)"); c.fillStyle = g; c.fillRect(x, -60, 200, 120); } }
+  else if (s.id === "glitch") { let seed = Math.floor(t * 12); const rr = () => ((seed = (seed * 9301 + 49297) % 233280) / 233280); for (let i = 0; i < 4; i++) { c.fillStyle = i % 2 ? "rgba(40,230,255,.6)" : hexA(s.glow, .6); c.fillRect(-420 + rr() * 500, -50 + rr() * 90, 60 + rr() * 160, 4 + rr() * 10); } }
+  else if (s.id === "gold") { const x = -700 + t * 450 % 1300; c.fillStyle = "rgba(255,255,240,.47)"; c.beginPath(); c.moveTo(x, -60); c.lineTo(x + 60, -60); c.lineTo(x + 10, 60); c.lineTo(x - 50, 60); c.fill(); }
+  else if (s.id === "void") { for (let i = 0; i < 26; i++) { c.fillStyle = i % 3 ? hexA(s.glow, Math.max(0, (140 + 110 * Math.sin(t * 3 + i)) / 255)) : "rgba(255,255,255," + Math.max(0, (140 + 110 * Math.sin(t * 3 + i)) / 255) + ")"; c.fillRect(-400 + (i * 97 % 640), -40 + (i * 53 % 80), 4, 4); } }
+  else { c.strokeStyle = hexA(s.trim, .35); c.lineWidth = 3; c.beginPath(); c.moveTo(-180, -20); c.lineTo(40, -20); c.moveTo(-180, 20); c.lineTo(40, 20); c.stroke(); }
+}
+function drawHealthBar(x, y, w, frac, draining) {
+  const bh = Math.max(5, w * .08), bx = x - w / 2;
+  ctx.fillStyle = "rgba(0,0,0,.66)"; rr(bx - 2, y - 2, w + 4, bh + 4, 4); ctx.fill();
+  let col = frac > .6 ? "#3ddc84" : frac > .3 ? "#f5b841" : "#ff5050";
+  if (draining && Math.sin(performance.now() / 1000 * 30) > 0) col = hexMix(col, "#ffffff", .35);
+  if (frac > 0) { ctx.fillStyle = col; rr(bx, y, w * Math.min(1, frac), bh, 3); ctx.fill(); }
+}
+
 // ---------- drawing ----------
 function rr(x, y, w, h, r) { ctx.beginPath(); ctx.roundRect(x, y, w, h, r); }
 function draw(now) {
   const g = GAMES[gameId], gp = GP[gameId];
   if (S.mode === RCT) return drawReaction();
   ctx.fillStyle = gp.bg; ctx.fillRect(0, 0, W, H);
+  const glow = ctx.createRadialGradient(W / 2, H / 2, 0, W / 2, H / 2, Math.max(W, H) * .55);
+  glow.addColorStop(0, hexA(g.color, .13)); glow.addColorStop(1, hexA(g.color, 0));
+  ctx.fillStyle = glow; ctx.fillRect(0, 0, W, H);
+  ctx.save();
+  if (S.shake > 0) ctx.translate((R() - .5) * S.shake * 40, (R() - .5) * S.shake * 40);
   const a = S.arena;
   ctx.fillStyle = "rgba(255,255,255,.025)"; rr(a.x, a.y, a.w, a.h, 18); ctx.fill();
   ctx.strokeStyle = "rgba(255,255,255,.07)"; ctx.lineWidth = 1; ctx.stroke();
@@ -544,7 +711,22 @@ function draw(now) {
       if (to > 0) { const frac = Math.max(0, 1 - (now - S.spawn) / to); ctx.strokeStyle = "rgba(236,239,243,.65)"; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(S.tx, S.ty, S.tr + 7, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * frac); ctx.stroke(); }
     }
   } else if (S.mode === BOT) [...S.bots].sort((p, q) => p.u - q.u).forEach(drawBot);
-  else drawTarget(S.bx, S.by + S.jumpOff, S.br, S.countdown <= 0 && hitShape(S.cx - S.bx, S.cy - (S.by + S.jumpOff), S.br));
+  else {
+    const onBall = S.countdown <= 0 && hitShape(S.cx - S.bx, S.cy - (S.by + S.jumpOff), S.br);
+    drawTarget(S.bx, S.by + S.jumpOff, S.br, onBall);
+    if (S.mode === HTK) drawHealthBar(S.bx, S.by + S.jumpOff - S.br - 14, S.br * 2.4, S.hp / 100, onBall);
+  }
+  for (const p of S.fx) { const k = p.life / p.max, s = p.size * (.5 + k * .5); ctx.globalAlpha = k; ctx.fillStyle = p.color; ctx.beginPath(); ctx.arc(p.x, p.y, s, 0, 7); ctx.fill(); }
+  ctx.globalAlpha = 1;
+  ctx.font = "700 18px 'Chakra Petch', sans-serif"; ctx.textAlign = "center";
+  for (const f of S.floats) { ctx.globalAlpha = Math.min(1, f.life / .4); ctx.fillStyle = f.color; ctx.fillText(f.text, f.x, f.y); }
+  ctx.globalAlpha = 1;
+  ctx.restore();
+  if ((S.mode === FLK || S.mode === BOT) && loadout.showGun && S.countdown <= 0) {
+    const k = H / 1080 * .85;
+    drawGunModel(ctx, W * .8 + (S.sway * 3 + S.recoil * 14) * k, H * .92 + (S.recoil * 26 + Math.sin(now * 1.6) * 3) * k, k, 12 + S.recoil * 5, now, currentSkin(), loadout.gun, S.muzzle > 0, true);
+  }
+  if (S.flash > 0) { ctx.fillStyle = "rgba(255,255,255," + (S.flash / .08 * .24) + ")"; ctx.fillRect(0, 0, W, H); }
 
   // HUD
   ctx.font = "600 12px 'Chakra Petch', sans-serif"; ctx.fillStyle = "#8592a6"; ctx.textAlign = "left";
@@ -556,15 +738,31 @@ function draw(now) {
   ctx.fillText(Math.max(0, S.time).toFixed(1), W / 2, 52);
   const score = S.mode === FLK ? S.hits + " hits  ·  " + (S.hits + S.misses ? Math.round(S.hits * 100 / (S.hits + S.misses)) + "% accuracy" : "–")
     : S.mode === BOT ? S.kills + " kills  ·  " + (S.botHits ? Math.round(S.headHits * 100 / S.botHits) + "% headshots" : "–")
+    : S.mode === HTK ? S.htKills + " kills  ·  " + (S.tot ? Math.round(S.on / S.tot * 100) : 0) + "% on target"
     : (S.tot ? Math.round(S.on / S.tot * 100) : 0) + "% on target";
   ctx.textAlign = "right"; ctx.fillText(score, W - 24, 34);
   ctx.textAlign = "center"; ctx.font = "13px Barlow, sans-serif"; ctx.fillStyle = "#8592a6"; ctx.fillText("Esc to stop", W / 2, H - 24);
-  if (rawInput === false) { ctx.textAlign = "left"; ctx.fillText("Your browser adds mouse acceleration. Use Chrome or Edge for exact sens.", 24, 34); }
+  if (rawInput === false && !calib) { ctx.textAlign = "left"; ctx.fillText("For exact sens, calibrate your mouse or use Chrome/Edge.", 24, H - 46); }
+  if (S.combo >= 3) {
+    const sc = 1 + S.comboPop * .35;
+    ctx.textAlign = "center"; ctx.font = "700 " + Math.round(36 * sc) + "px 'Chakra Petch', sans-serif"; ctx.fillStyle = hexMix(g.color, "#ffffff", S.comboPop * .6);
+    ctx.fillText("×" + S.combo, W / 2, 104 + 10 * sc);
+    ctx.font = "600 11px 'Chakra Petch', sans-serif"; ctx.fillStyle = "#8592a6"; ctx.fillText("COMBO", W / 2, 128 + 12 * sc);
+  }
+  let fy = 54;
+  for (const it of S.feed) {
+    const alpha = Math.min(1, it.life / .5), txt = (it.head ? "HS  " : "»  ") + it.text;
+    ctx.font = "13px Barlow, sans-serif"; const tw = ctx.measureText(txt).width + 20;
+    ctx.globalAlpha = alpha; ctx.fillStyle = "rgba(0,0,0,.6)"; rr(W - 24 - tw, fy, tw, 26, 6); ctx.fill();
+    if (it.head) { ctx.fillStyle = "#ff4655"; ctx.fillRect(W - 24 - tw, fy, 3, 26); }
+    ctx.fillStyle = it.head ? "#ff7882" : "#eaf0f6"; ctx.textAlign = "center"; ctx.fillText(txt, W - 24 - tw / 2, fy + 17);
+    ctx.globalAlpha = 1; fy += 30;
+  }
   if (S.countdown > 0) {
     ctx.fillStyle = "#eaf0f6"; ctx.font = "700 110px 'Chakra Petch', sans-serif"; ctx.textAlign = "center";
     ctx.fillText(String(Math.ceil(S.countdown)), W / 2, H * .3);
     ctx.font = "16px Barlow, sans-serif"; ctx.fillStyle = "#8592a6";
-    ctx.fillText(S.mode === FND && S.fIdx > 0 ? "Next round, new hidden sensitivity" : S.mode === FLK ? "Click the targets as they appear" : S.mode === BOT ? "Body shots do 1 damage. Headshots kill instantly." : "Keep your crosshair on the ball", W / 2, H * .3 + 36);
+    ctx.fillText(S.mode === FND && S.fIdx > 0 ? "Next round, new hidden sensitivity" : S.mode === FLK ? "Click the targets as they appear" : S.mode === BOT ? "Body shots do 1 damage. Headshots kill instantly." : S.mode === HTK ? "No clicking. Stay on the ball to drain its health." : "Keep your crosshair on the ball", W / 2, H * .3 + 36);
   }
   drawCrosshair(S.cx, S.cy);
   if (S.mode === BOT && S.marks.length) {
@@ -630,7 +828,7 @@ function roundOver() {
     }
     return finishFinder();
   }
-  if (S.mode === FLK) finishFlick(); else if (S.mode === BOT) finishBots(); else finishTracking();
+  if (S.mode === FLK) finishFlick(); else if (S.mode === BOT) finishBots(); else if (S.mode === HTK) finishHealth(); else finishTracking();
 }
 function endRound() {
   S.active = false;
@@ -652,9 +850,7 @@ function flickCoach(notEnough) {
 }
 const title = () => GAMES[gameId].name + " · " + S.mode + (S.mode === RCT || S.mode === FND ? "" : " · " + DIFFS[S.diff]);
 
-function finishTracking() {
-  endRound();
-  const pct = S.tot ? S.on / S.tot * 100 : 0, hist = history(TRK, S.diff), pb = saveRecord(TRK, S.diff, pct, false);
+function trackingCoach() {
   let c = { m: 1, text: "Your tracking looks balanced: you're not over-correcting and not falling behind. Your sensitivity suits you here." };
   if (S.leadTime < 3) c.text = "Not enough close tracking this round to judge your sensitivity. Try to stay on the ball, or drop the difficulty a level.";
   else {
@@ -662,14 +858,27 @@ function finishTracking() {
     if (ratio > 1.35) c = { m: 1 - clamp((ratio - 1.2) * .5, .05, .2), text: "Your crosshair travelled " + ratio.toFixed(1) + "x as far as the ball did. All those small over-corrections usually mean your sensitivity is a bit high." };
     else if (lead < -1 && ratio < 1.15) c = { m: 1 + clamp((-lead - .8) * .15, .05, .2), text: "You were usually trailing about " + (-lead / 2).toFixed(1) + " ball-widths behind the ball. That usually means your sensitivity is a bit low, so it's hard to keep up when it changes direction." };
   }
-  showResults({ main: pct.toFixed(1) + "%", label: "of the time on target", pb, coach: c.text, sug: suggest(c.m),
+  return c;
+}
+function finishTracking() {
+  endRound();
+  const pct = S.tot ? S.on / S.tot * 100 : 0, hist = history(TRK, S.diff), pb = saveRecord(TRK, S.diff, pct, false), c = trackingCoach();
+  showResults({ main: pct.toFixed(1) + "%", score: pct, label: "of the time on target", pb, coach: c.text, sug: suggest(c.m),
     lines: [hist.length ? "Previous best: " + Math.max(...hist.map(r => r.s)).toFixed(1) + "%" : null, "Rounds played at this difficulty: " + (hist.length + 1)],
     code: makeCode("T", S.diff, pct.toFixed(1)) });
+}
+function finishHealth() {
+  endRound();
+  const pct = S.tot ? S.on / S.tot * 100 : 0, hist = history(HTK, S.diff), pb = saveRecord(HTK, S.diff, S.htKills, false), c = trackingCoach();
+  showResults({ main: String(S.htKills), score: S.htKills, label: "targets tracked down in 30 seconds", pb, coach: c.text, sug: suggest(c.m),
+    lines: ["Time on target: " + pct.toFixed(1) + "%", S.htTtk.length ? "Average time to kill: " + (S.htTtk.reduce((s, v) => s + v, 0) / S.htTtk.length).toFixed(2) + " s" : null,
+      hist.length ? "Previous best: " + Math.max(...hist.map(r => r.s)) + " kills" : null],
+    code: makeCode("H", S.diff, String(S.htKills)) });
 }
 function finishFlick() {
   endRound();
   const shots = S.hits + S.misses, hist = history(FLK, S.diff), pb = saveRecord(FLK, S.diff, S.hits, false), c = flickCoach("Not enough flicks this round to judge your sensitivity. Hit at least 6 targets.");
-  showResults({ main: String(S.hits), label: "targets hit in 30 seconds", pb, coach: c.text, sug: suggest(c.m),
+  showResults({ main: String(S.hits), score: S.hits, label: "targets hit in 30 seconds", pb, coach: c.text, sug: suggest(c.m),
     lines: ["Accuracy: " + (shots ? Math.round(S.hits * 100 / shots) : 0) + "%  (" + S.misses + " missed clicks)",
       S.hitTimes.length ? "Average time per target: " + Math.round(S.hitTimes.reduce((s, v) => s + v, 0) / S.hitTimes.length * 1000) + " ms" : null,
       S.expired ? S.expired + " targets vanished before you hit them" : null,
@@ -679,7 +888,7 @@ function finishFlick() {
 function finishBots() {
   endRound();
   const hist = history(BOT, S.diff), pb = saveRecord(BOT, S.diff, S.kills, false), c = flickCoach("Not enough kills this round to judge your sensitivity. Get at least 7 kills.");
-  showResults({ main: String(S.kills), label: "bots eliminated in 30 seconds", pb, coach: c.text, sug: suggest(c.m),
+  showResults({ main: String(S.kills), score: S.kills, label: "bots eliminated in 30 seconds", pb, coach: c.text, sug: suggest(c.m),
     lines: ["Headshots: " + (S.botHits ? Math.round(S.headHits * 100 / S.botHits) : 0) + "% of hits  (" + S.headKills + " headshot kills)",
       "Accuracy: " + (S.shots ? Math.round(S.botHits * 100 / S.shots) : 0) + "%  (" + S.shots + " shots)",
       S.ttk.length ? "Average time to kill: " + Math.round(S.ttk.reduce((s, v) => s + v, 0) / S.ttk.length * 1000) + " ms" : null,
@@ -691,7 +900,7 @@ function finishReaction() {
   const t = S.rTimes, avg = t.reduce((s, v) => s + v, 0) / t.length, hist = history(RCT, 0), pb = saveRecord(RCT, 0, avg, true);
   const rating = avg < 170 ? "Outstanding. That's pro-level reaction speed." : avg < 210 ? "Great. Faster than most players." : avg < 250 ? "Good. Right around the typical gamer range."
     : avg < 300 ? "Average. Most people land around 200 to 280 ms." : "A bit slow this time. Being tired or a laggy screen adds time, so try again later.";
-  showResults({ main: Math.round(avg) + " ms", label: "average over 5 tries", pb, coachHead: "How you did", coach: rating + " These times include your mouse and monitor delay, so they run a little higher than in-game feel.", sug: null,
+  showResults({ main: Math.round(avg) + " ms", score: avg, label: "average over 5 tries", pb, coachHead: "How you did", coach: rating + " These times include your mouse and monitor delay, so they run a little higher than in-game feel.", sug: null,
     lines: ["Fastest: " + Math.round(Math.min(...t)) + " ms", "Tries: " + t.map(x => Math.round(x)).join("  ·  ") + " ms", hist.length ? "Previous best average: " + Math.round(Math.min(...hist.map(r => r.s))) + " ms" : null],
     code: makeCode("R", 0, String(Math.round(avg))) });
 }
@@ -714,13 +923,32 @@ function finishFinder() {
 let lastResult = null;
 function showResults(r) {
   lastResult = r;
+  // ranks and skin unlocks
+  const rank = r.score == null ? -1 : rankIndex(S.mode, S.diff, r.score);
+  const before = SKINS.filter(unlocked).map(s => s.id);
+  if (rank > progressStore.bestRank) progressStore.bestRank = rank;
+  if (S.mode === BOT && S.kills > progressStore.bestBotKills) progressStore.bestBotKills = S.kills;
+  store.set("progress", progressStore);
+  const fresh = SKINS.filter(s => unlocked(s) && !before.includes(s.id));
   show("results");
   $("res-title").textContent = title();
-  $("res-main").textContent = r.main; $("res-main").style.color = GAMES[gameId].color;
+  countUp($("res-main"), r);
+  $("res-main").style.color = GAMES[gameId].color;
   $("res-label").textContent = r.label;
   $("res-pb").hidden = !r.pb;
+  const badge = $("res-rank"); badge.textContent = ""; badge.hidden = rank < 0;
+  if (rank >= 0) {
+    const steps = rankSteps(S.mode, S.diff);
+    badge.style.setProperty("--rc", RANK_COLORS[rank]);
+    badge.append(el("div", { class: "rank-shield" }, [el("span", { text: "▲".repeat(Math.min(3, Math.floor(rank / 2) + 1)) })]),
+      el("div", {}, [el("div", { class: "rank-name", text: RANKS[rank] }),
+        el("div", { class: "muted", style: "font-size:14px", text: rank < 7 ? "Next: " + RANKS[rank + 1] + " at " + fmtRes(S.mode, steps[rank]) : "Top rank!" })]));
+    badge.classList.remove("pop"); void badge.offsetWidth; badge.classList.add("pop");
+  }
   const lines = $("res-lines"); lines.textContent = "";
   r.lines.filter(Boolean).forEach(l => lines.append(el("div", { text: l })));
+  if ((S.mode === FLK || S.mode === BOT || S.mode === HTK) && S.bestCombo >= 3) lines.append(el("div", { text: "Best combo: ×" + S.bestCombo }));
+  fresh.forEach(s => lines.append(el("div", { class: "unlock", style: "--g:" + s.glow }, ["New skin unlocked: ", el("b", { text: s.name }), " · equip it in Loadout"])));
   if (r.chart) lines.append(r.chart);
   $("coach-head").textContent = r.coachHead || "Sensitivity coach";
   $("coach-text").textContent = r.coach;
@@ -737,6 +965,18 @@ function showResults(r) {
   $("code-text").textContent = r.code || "";
   $("code-msg").textContent = "";
   renderSubmit();
+}
+// the score rolls up to its final value
+function countUp(node, r) {
+  if (r.score == null || S.mode === FND) { node.textContent = r.main; return; }
+  const start = performance.now(), dur = 900, fmt = v => S.mode === TRK ? v.toFixed(1) + "%" : S.mode === RCT ? Math.round(v) + " ms" : String(Math.round(v));
+  node.classList.remove("land");
+  const tick = () => {
+    const k = Math.min(1, (performance.now() - start) / dur), e = 1 - Math.pow(1 - k, 3);
+    node.textContent = k < 1 ? fmt(r.score * e) : r.main;
+    if (k < 1) requestAnimationFrame(tick); else node.classList.add("land");
+  };
+  tick();
 }
 function renderSubmit() {
   const box = $("submit-row"); box.textContent = "";
@@ -773,6 +1013,7 @@ function presenceText() {
     let st = S.countdown > 0 ? "Get ready…"
       : S.mode === FLK ? S.hits + " hits · " + (S.hits + S.misses ? Math.round(S.hits * 100 / (S.hits + S.misses)) : 0) + "% accuracy"
       : S.mode === BOT ? S.kills + " kills · " + (S.botHits ? Math.round(S.headHits * 100 / S.botHits) : 0) + "% headshots"
+      : S.mode === HTK ? S.htKills + " kills · " + (S.tot ? Math.round(S.on / S.tot * 100) : 0) + "% on target"
       : S.mode === RCT ? "Try " + Math.min(5, S.rTimes.length + 1) + " of 5"
       : S.mode === FND ? "Round " + Math.min(5, S.fIdx + 1) + " of 5"
       : (S.tot ? Math.round(S.on / S.tot * 100) : 0) + "% on target";
@@ -780,11 +1021,12 @@ function presenceText() {
   }
   if (vis("results") && lastResult && S) {
     const m = lastResult.main;
-    const st = S.mode === TRK ? m + " on target" : S.mode === FLK ? m + " hits" : S.mode === BOT ? m + " kills" : S.mode === RCT ? m + " average" : "Best sens " + m;
+    const st = S.mode === TRK ? m + " on target" : S.mode === FLK ? m + " hits" : (S.mode === BOT || S.mode === HTK) ? m + " kills" : S.mode === RCT ? m + " average" : "Best sens " + m;
     return { details: run + " · results", status: st, game: gameId };
   }
   if (vis("game") && g) return { details: g.name + " · choosing a mode", status: "Sens " + fmtSens(gameId, sensOf(gameId)), game: gameId };
   if (vis("setup")) return { details: "Setting up", status: "", game: "" };
+  if (vis("loadout")) return { details: "Picking a gun skin", status: currentSkin().name, game: "" };
   return { details: "In the menus", status: "", game: "" };
 }
 if (TAURI) {
@@ -804,6 +1046,39 @@ if (TAURI) {
     } catch {}
   })();
 }
+
+// ---------- loadout ----------
+function renderLoadout() {
+  const gp = $("gun-pick"); gp.textContent = "";
+  [["warden", "Warden · rifle"], ["kestrel", "Kestrel · suppressed"]].forEach(([id, label]) =>
+    gp.append(el("button", { class: "chip", "aria-pressed": String(loadout.gun === id), onclick: () => { loadout.gun = id; saveLoadout(); renderLoadout(); } }, [el("span", { text: label })])));
+  const op = $("fx-options"); op.textContent = "";
+  [["showGun", "Show gun"], ["sound", "Sounds"], ["shake", "Screen shake"]].forEach(([k, label]) =>
+    op.append(el("button", { class: "chip", "aria-pressed": String(!!loadout[k]), onclick: () => { loadout[k] = !loadout[k]; saveLoadout(); if (k === "sound" && loadout.sound) sound(2); renderLoadout(); } }, [el("span", { text: label + ": " + (loadout[k] ? "On" : "Off") })])));
+  const br = $("best-rank"); br.textContent = progressStore.bestRank >= 0 ? "Best rank so far: " + RANKS[progressStore.bestRank] : "";
+  br.style.color = progressStore.bestRank >= 0 ? RANK_COLORS[progressStore.bestRank] : "";
+  const grid = $("skin-grid"); grid.textContent = "";
+  for (const s of SKINS) {
+    const open = unlocked(s), sel = currentSkin().id === s.id;
+    grid.append(el("button", { class: "skin", "aria-pressed": String(sel), disabled: open ? null : "", style: "--b:" + s.body + ";--g:" + s.glow, onclick: () => { loadout.skin = s.id; saveLoadout(); renderLoadout(); } },
+      [el("i"), el("div", {}, [el("b", { text: s.name }), el("span", { text: open ? (sel ? "Equipped" : "Click to equip") : "Locked · " + s.need })])]));
+  }
+  $("gun-label").textContent = currentSkin().name + " · " + (loadout.gun === "kestrel" ? "Kestrel" : "Warden");
+  $("gun-label").style.color = currentSkin().glow;
+  previewLoop();
+}
+function previewLoop() {
+  const c = $("gun-canvas");
+  if ($("v-loadout").hidden) return;
+  const dpr = Math.min(2, devicePixelRatio || 1), w = c.clientWidth, h = c.clientHeight;
+  if (c.width !== w * dpr) { c.width = w * dpr; c.height = h * dpr; }
+  const g2 = c.getContext("2d"); g2.setTransform(dpr, 0, 0, dpr, 0, 0); g2.clearRect(0, 0, w, h);
+  const t = performance.now() / 1000, k = Math.min(w / 900, h / 340);
+  drawGunModel(g2, w / 2 + 158 * k, h * .42, k,Math.sin(t * .8) * 2, t, currentSkin(), loadout.gun, t % 2.2 < .06, false);
+  requestAnimationFrame(previewLoop);
+}
+$("open-loadout").onclick = () => show("loadout");
+$("loadout-back").onclick = e => { e.preventDefault(); show("game"); };
 
 // ---------- start ----------
 (async () => {

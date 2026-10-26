@@ -150,8 +150,9 @@ class Trainer : Form
     const int WM_INPUT = 0x00FF;
     const uint RID_INPUT = 0x10000003;
 
-    const string TRK = "Tracking", FLK = "Flick", BOT = "Bots", RCT = "Reaction", FND = "Sens finder";
-    const string AppVersion = "1.5.0";
+    const string TRK = "Tracking", FLK = "Flick", BOT = "Bots", RCT = "Reaction", FND = "Sens finder", HTK = "Health Track";
+    static readonly double[] DrainRate = { 110, 80, 65, 55 };   // health per second while your crosshair is on the ball
+    const string AppVersion = "1.6.0";
     const string Repo = "THATLMG/aim-trainer";
     static readonly string[] DiffNames = { "Easy", "Medium", "Hard", "Insane" };
     static readonly double[] BallR = { 0.045, 0.033, 0.024, 0.017 };
@@ -173,7 +174,7 @@ class Trainer : Form
     GameInfo game;
     string mode = TRK;
     int diff = 1;
-    enum Scr { Setup, Home, Game, Play, Results }
+    enum Scr { Setup, Home, Game, Play, Results, Loadout }
     Scr scr = Scr.Home;
 
     const string AppName = "LMG's Aim Trainer";
@@ -218,6 +219,33 @@ class Trainer : Form
     bool primaryDone;
     int hits, misses, expired;
     List<double> hitTimes = new List<double>(), progress = new List<double>();
+
+    // health track: tracking where staying on the ball drains its health
+    double ballHp = 100, htSpawnT;
+    int htKills;
+    List<double> htTtk = new List<double>();
+
+    // effects
+    class Particle { public double X, Y, VX, VY, Life, MaxLife, Size; public Color C; }
+    class FloatText { public double X, Y, Life; public string Text; public Color C; }
+    class FeedItem { public string Text; public bool Head; public double Life; }
+    List<Particle> fx = new List<Particle>();
+    List<FloatText> floats = new List<FloatText>();
+    List<FeedItem> feed = new List<FeedItem>();
+    int combo, bestCombo;
+    double comboPop, shakeT, flashT;
+    bool soundOn = true, shakeOn = true;
+
+    // gun on screen (Flick and Bots)
+    double recoil, muzzleT, sway;
+    string gunId = "warden", skinId = "standard";
+    bool showGun = true;
+    double bestRankEver = -1;   // highest rank index reached, for unlocking skins
+    int bestBotKills;
+    int resRank = -1;
+    double resScore, resAnimStart;
+    List<string> newUnlocks = new List<string>();
+    System.Windows.Forms.Timer fxTimer = new System.Windows.Forms.Timer { Interval = 33 };
 
     // bots
     List<Bot> bots = new List<Bot>();
@@ -346,6 +374,8 @@ class Trainer : Form
             if (scr != Scr.Play && scr != Scr.Setup && MusicVisible) Invalidate();
         };
         musicTimer.Start();
+        fxTimer.Tick += delegate { if (scr == Scr.Home || scr == Scr.Game || scr == Scr.Results || scr == Scr.Loadout) Invalidate(); };
+        fxTimer.Start();
         var dt = new Thread(DiscordLoop) { IsBackground = true };
         dt.Start();
     }
@@ -358,6 +388,7 @@ class Trainer : Form
             : playMode == RCT ? game.Name + " · Reaction test"
             : game.Name + " · " + playMode + " · " + DiffNames[playDiff];
         if (scr == Scr.Setup) d = "Setting up";
+        else if (scr == Scr.Loadout) d = "Picking a gun skin";
         else if (scr == Scr.Home || game == null) d = "In the menus";
         else if (scr == Scr.Game) { d = game.Name + " · choosing a mode"; s = "Sens " + game.Fmt(Sens(game)); g = game.Id; }
         else if (scr == Scr.Play)
@@ -366,6 +397,7 @@ class Trainer : Form
             if (countdown > 0) s = "Get ready…";
             else if (playMode == FLK) s = hits + " hits · " + (hits + misses > 0 ? hits * 100 / (hits + misses) : 0) + "% accuracy";
             else if (playMode == BOT) s = kills + " kills · " + (botHits > 0 ? headHits * 100 / botHits : 0) + "% headshots";
+            else if (playMode == HTK) s = htKills + " kills · " + (totTime > 0 ? (onTime / totTime * 100).ToString("0") : "0") + "% on target";
             else if (playMode == RCT) s = "Try " + Math.Min(5, rTimes.Count + 1) + " of 5";
             else if (playMode == FND) s = "Round " + Math.Min(5, fIdx + 1) + " of 5";
             else s = (totTime > 0 ? (onTime / totTime * 100).ToString("0") : "0") + "% on target";
@@ -373,7 +405,7 @@ class Trainer : Form
         else
         {
             d = run + " · results"; g = game.Id;
-            s = playMode == TRK ? resMain + " on target" : playMode == FLK ? resMain + " hits" : playMode == BOT ? resMain + " kills"
+            s = playMode == TRK ? resMain + " on target" : playMode == FLK ? resMain + " hits" : (playMode == BOT || playMode == HTK) ? resMain + " kills"
               : playMode == RCT ? resMain + " average" : "Best sens " + resMain;
         }
         rpcDetails = d; rpcState = s; rpcGame = g;
@@ -765,6 +797,8 @@ class Trainer : Form
                 if (p[0] == "M2" && p.Length >= 2) lyricsInRound = p[1] == "1";
                 if (p[0] == "D" && p.Length >= 2) discordOn = p[1] == "1";
                 if (p[0] == "A" && p.Length >= 2) accelOn = p[1] == "1";
+                if (p[0] == "G" && p.Length >= 6) { gunId = p[1]; skinId = p[2]; showGun = p[3] == "1"; soundOn = p[4] == "1"; shakeOn = p[5] == "1"; }
+                if (p[0] == "K" && p.Length >= 3) { bestRankEver = double.Parse(p[1], ci); bestBotKills = int.Parse(p[2], ci); }
                 if (p[0] == "S" && p.Length >= 4) settings[p[1]] = new[] { double.Parse(p[2], ci), double.Parse(p[3], ci) };
                 if (p[0] == "R" && p.Length >= 6)
                     recs.Add(new Rec { Game = p[1], Mode = p[2], Diff = int.Parse(p[3], ci), Score = double.Parse(p[4], ci), When = DateTime.Parse(p[5], ci) });
@@ -785,6 +819,8 @@ class Trainer : Form
             lines.Add("M2\t" + (lyricsInRound ? "1" : "0"));
             lines.Add("D\t" + (discordOn ? "1" : "0"));
             lines.Add("A\t" + (accelOn ? "1" : "0"));
+            lines.Add(string.Join("\t", new[] { "G", gunId, skinId, showGun ? "1" : "0", soundOn ? "1" : "0", shakeOn ? "1" : "0" }));
+            lines.Add(string.Format(ci, "K\t{0}\t{1}", bestRankEver, bestBotKills));
             foreach (var kv in settings) lines.Add(string.Format(ci, "S\t{0}\t{1}\t{2}", kv.Key, kv.Value[0], kv.Value[1]));
             foreach (var r in recs) lines.Add(string.Format(ci, "R\t{0}\t{1}\t{2}\t{3}\t{4:yyyy-MM-dd HH:mm}", r.Game, r.Mode, r.Diff, r.Score, r.When));
             Directory.CreateDirectory(Path.GetDirectoryName(dataPath));
@@ -802,6 +838,7 @@ class Trainer : Form
     {
         var prev = History(m, d);
         bool pb = prev.Count > 0 && (lowerBetter ? score < prev.Min(r => r.Score) : score > prev.Max(r => r.Score));
+        resScore = score; resRank = RankIndex(m, d, score);
         recs.Add(new Rec { Game = game.Id, Mode = m, Diff = d, Score = score, When = DateTime.Now });
         Save();
         return pb;
@@ -938,7 +975,7 @@ class Trainer : Form
         if (e.KeyCode == Keys.Escape)
         {
             if (scr == Scr.Play) AbortPlay();
-            else if (scr == Scr.Results) GoGame(game);
+            else if (scr == Scr.Results || scr == Scr.Loadout) GoGame(game);
             else if (scr == Scr.Game) GoHome();
             e.Handled = e.SuppressKeyPress = true;
         }
@@ -1011,6 +1048,10 @@ class Trainer : Form
         shots = botHits = headHits = kills = headKills = 0;
         ttk.Clear(); bots.Clear(); path.Clear();
         hitMarkT = 0; pathFresh = false;
+        ballHp = 100; htKills = 0; htTtk.Clear(); htSpawnT = 0;
+        fx.Clear(); floats.Clear(); feed.Clear();
+        combo = bestCombo = 0; comboPop = shakeT = flashT = 0;
+        recoil = 0; muzzleT = 0;
         if (m == BOT) for (int i = 0; i < BotCount[playDiff]; i++) SpawnBot(0);
         ResetTrackStats();
         rawDx = rawDy = 0;
@@ -1092,6 +1133,7 @@ class Trainer : Form
             moved = Math.Sqrt((cx - ox) * (cx - ox) + (cy - oy) * (cy - oy));
         }
 
+        StepFx(dt, dx);
         if (countdown > 0)
         {
             countdown -= dt;
@@ -1100,6 +1142,7 @@ class Trainer : Form
                 countdown = 0;
                 if (playMode == FLK) SpawnTarget(now);
                 if (playMode == BOT) { foreach (var b in bots) b.SpawnT = now; StartPath(); }
+                if (playMode == HTK) htSpawnT = now;
             }
         }
         else if (dt > 0) Step(dt, now, moved);
@@ -1118,10 +1161,104 @@ class Trainer : Form
         }
         if (playMode == FLK) StepFlick(dt, now, moved);
         else if (playMode == BOT) StepBots(dt, now, moved);
+        else if (playMode == HTK) StepHealth(dt, now, moved);
         else StepTracking(dt, moved);
 
         timeLeft -= dt;
         if (timeLeft <= 0) RoundOver();
+    }
+
+    // ---------- health track ----------
+    void StepHealth(double dt, double now, double moved)
+    {
+        StepTracking(dt, moved);
+        double by2 = by + jumpOff;
+        if (!Hit(cx - bx, cy - by2, br)) return;
+        ballHp -= DrainRate[playDiff] * dt;
+        if (rnd.NextDouble() < dt * 30) Burst(bx + (rnd.NextDouble() - 0.5) * br, by2 + (rnd.NextDouble() - 0.5) * br, game.Accent, 1, 120, 0.25);
+        if (ballHp > 0) return;
+        htKills++;
+        htTtk.Add(now - htSpawnT);
+        Burst(bx, by2, game.Accent, 26, 420, 0.6);
+        Burst(bx, by2, Color.White, 8, 260, 0.35);
+        AddFeed("Target down" + (now - htSpawnT < 1.2 ? "  ·  fast!" : ""), false);
+        Shake(0.12); Sound(2);
+        combo++; comboPop = 1; if (combo > bestCombo) bestCombo = combo;
+        // a fresh ball somewhere else in the arena
+        ballHp = 100; htSpawnT = now;
+        bx = arena.Left + br + rnd.NextDouble() * (arena.Width - 2 * br);
+        by = arena.Top + br + (game.Jumps ? JumpH() : 0) + rnd.NextDouble() * Math.Max(1, arena.Height - 2 * br - (game.Jumps ? JumpH() : 0));
+        jumpOff = jumpV = 0;
+        double a = rnd.NextDouble() * Math.PI * 2;
+        dirX = Math.Cos(a); dirY = Math.Sin(a); heading = a;
+    }
+
+    // ---------- effects ----------
+    void Burst(double x, double y, Color c, int n, double speed, double life)
+    {
+        for (int i = 0; i < n; i++)
+        {
+            double ang = rnd.NextDouble() * Math.PI * 2, sp = speed * (0.3 + rnd.NextDouble() * 0.7) * S;
+            fx.Add(new Particle { X = x, Y = y, VX = Math.Cos(ang) * sp, VY = Math.Sin(ang) * sp - speed * 0.3 * S, Life = life, MaxLife = life, Size = (2 + rnd.NextDouble() * 3) * S, C = c });
+        }
+    }
+    // ---------- sounds: tiny tones made in memory (1 = hit, 2 = kill, 3 = headshot) ----------
+    [DllImport("winmm.dll")] static extern bool PlaySound(IntPtr sound, IntPtr hmod, uint flags);
+    const uint SND_ASYNC = 0x1, SND_NODEFAULT = 0x2, SND_MEMORY = 0x4;
+    static IntPtr[] tones;
+
+    static IntPtr MakeTone(double[] freqs, double seconds, double volume)
+    {
+        int rate = 22050, n = (int)(rate * seconds);
+        var ms = new MemoryStream();
+        var w = new BinaryWriter(ms);
+        w.Write(System.Text.Encoding.ASCII.GetBytes("RIFF")); w.Write(36 + n * 2); w.Write(System.Text.Encoding.ASCII.GetBytes("WAVEfmt "));
+        w.Write(16); w.Write((short)1); w.Write((short)1); w.Write(rate); w.Write(rate * 2); w.Write((short)2); w.Write((short)16);
+        w.Write(System.Text.Encoding.ASCII.GetBytes("data")); w.Write(n * 2);
+        for (int i = 0; i < n; i++)
+        {
+            double t = (double)i / rate, k = (double)i / n;
+            double f = freqs[0] + (freqs[freqs.Length - 1] - freqs[0]) * k;   // slide between the first and last frequency
+            double env = Math.Min(1, t * 400) * Math.Pow(1 - k, 2);           // quick attack, smooth fade
+            w.Write((short)(Math.Sin(2 * Math.PI * f * t) * env * volume * 32767));
+        }
+        byte[] bytes = ms.ToArray();
+        return GCHandle.Alloc(bytes, GCHandleType.Pinned).AddrOfPinnedObject();  // stays valid while the sound plays
+    }
+
+    void Sound(int kind)
+    {
+        if (!soundOn) return;
+        try
+        {
+            if (tones == null) tones = new[] { MakeTone(new[] { 1500.0, 1100 }, 0.04, 0.35), MakeTone(new[] { 520.0, 980 }, 0.11, 0.45), MakeTone(new[] { 2100.0, 1700 }, 0.16, 0.4) };
+            PlaySound(tones[kind - 1], IntPtr.Zero, SND_MEMORY | SND_ASYNC | SND_NODEFAULT);
+        }
+        catch { }
+    }
+
+    void AddFloat(double x, double y, string text, Color c) { floats.Add(new FloatText { X = x, Y = y, Text = text, C = c, Life = 0.7 }); }
+    void AddFeed(string text, bool head) { feed.Insert(0, new FeedItem { Text = text, Head = head, Life = 3 }); if (feed.Count > 5) feed.RemoveAt(5); }
+    void Shake(double t) { if (shakeOn) shakeT = Math.Max(shakeT, t); }
+    void BreakCombo() { combo = 0; }
+
+    void StepFx(double dt, int mouseDx)
+    {
+        for (int i = fx.Count - 1; i >= 0; i--)
+        {
+            var p = fx[i];
+            p.Life -= dt;
+            if (p.Life <= 0) { fx.RemoveAt(i); continue; }
+            p.VY += 900 * S * dt; p.X += p.VX * dt; p.Y += p.VY * dt;
+        }
+        for (int i = floats.Count - 1; i >= 0; i--) { floats[i].Life -= dt; floats[i].Y -= 60 * S * dt; if (floats[i].Life <= 0) floats.RemoveAt(i); }
+        for (int i = feed.Count - 1; i >= 0; i--) { feed[i].Life -= dt; if (feed[i].Life <= 0) feed.RemoveAt(i); }
+        comboPop = Math.Max(0, comboPop - dt * 4);
+        shakeT = Math.Max(0, shakeT - dt);
+        flashT = Math.Max(0, flashT - dt);
+        recoil *= Math.Pow(0.0005, dt);                     // springs back in about a quarter second
+        muzzleT = Math.Max(0, muzzleT - dt);
+        sway += (Math.Max(-40, Math.Min(40, mouseDx)) * 0.15 - sway) * Math.Min(1, dt * 10);
     }
 
     bool Hit(double dx, double dy, double r)
@@ -1245,19 +1382,24 @@ class Trainer : Form
             }
         }
         double timeout = FlickTimeout[playDiff];
-        if (timeout > 0 && now - spawnT > timeout) { expired++; SpawnTarget(now); }
+        if (timeout > 0 && now - spawnT > timeout) { expired++; BreakCombo(); SpawnTarget(now); }
     }
 
     void FlickClick(double now)
     {
+        Fire();
         if (Hit(cx - tx, cy - ty, tr))
         {
             hits++;
             hitTimes.Add(now - spawnT);
             if (!primaryDone && flickD > 3 * tr) progress.Add(((cx - startX) * ux + (cy - startY) * uy) / flickD);
+            Burst(tx, ty, game.Accent, 16, 380, 0.5);
+            combo++; comboPop = 1; if (combo > bestCombo) bestCombo = combo;
+            if (now - spawnT < 0.35) AddFloat(tx, ty - tr - P(10), "QUICK!", Color.FromArgb(255, 211, 78));
+            Sound(1);
             SpawnTarget(now);
         }
-        else misses++;
+        else { misses++; BreakCombo(); }
     }
 
     // ---------- bots ----------
@@ -1334,6 +1476,7 @@ class Trainer : Form
     void BotClick(double now)
     {
         shots++;
+        Fire();
         foreach (var b in bots.Where(x => !x.Dead).OrderByDescending(x => x.U))
         {
             int part = BotPart(b, cx, cy);
@@ -1344,6 +1487,8 @@ class Trainer : Form
             b.Hp -= part == 2 ? 3 : 1;
             b.Flash = 0.08;
             hitMarkT = 0.12; hitMarkHead = part == 2;
+            Burst(cx, cy, part == 2 ? Color.FromArgb(255, 90, 90) : Color.FromArgb(25, 230, 232), part == 2 ? 10 : 6, 300, 0.35);
+            combo++; comboPop = 1; if (combo > bestCombo) bestCombo = combo;
             if (b.Hp <= 0)
             {
                 b.Dead = true; b.DeadT = 0.25;
@@ -1351,9 +1496,23 @@ class Trainer : Form
                 if (part == 2) headKills++;
                 ttk.Add(now - b.SpawnT);
                 StartPath();
+                Burst(b.X, b.Ground - b.U, Color.FromArgb(25, 230, 232), 30, 480, 0.7);
+                AddFeed(part == 2 ? "Headshot kill" : "Kill", part == 2);
+                Shake(part == 2 ? 0.16 : 0.1);
+                if (part == 2) { AddFloat(cx, cy - P(26), "HEADSHOT", Color.FromArgb(255, 70, 85)); flashT = 0.08; Sound(3); }
+                else Sound(2);
             }
+            else Sound(1);
             return;
         }
+        BreakCombo();
+    }
+
+    // The gun kicks back and flashes on every shot.
+    void Fire()
+    {
+        recoil = Math.Min(1.4, recoil + 1);
+        muzzleT = 0.05;
     }
 
     void StartPath() { path.Clear(); pathStartX = cx; pathStartY = cy; pathFresh = true; }
@@ -1413,6 +1572,7 @@ class Trainer : Form
         }
         else if (playMode == FLK) FinishFlick();
         else if (playMode == BOT) FinishBots();
+        else if (playMode == HTK) FinishHealth();
         else FinishTracking();
     }
 
@@ -1420,8 +1580,316 @@ class Trainer : Form
     {
         copyNote = "";
         UnlockMouse();
+        // ranks and skin unlocks
+        newUnlocks.Clear();
+        var before = Skins.Where(Unlocked).Select(s => s.Id).ToList();
+        if (resRank > bestRankEver) bestRankEver = resRank;
+        if (playMode == BOT && kills > bestBotKills) bestBotKills = kills;
+        foreach (var s in Skins) if (Unlocked(s) && !before.Contains(s.Id)) newUnlocks.Add(s.Name);
+        Save();
+        resAnimStart = sw.Elapsed.TotalSeconds;
         scr = Scr.Results;
         Invalidate();
+    }
+
+    // ---------- health bar over the Health Track ball ----------
+    void DrawHealthBar(Graphics g, double x, double y, double w, double frac, bool draining)
+    {
+        float bw = (float)w, bh = Math.Max(P(5), (float)w * 0.08f), bx2 = (float)(x - w / 2), by2 = (float)y;
+        FillRound(g, Color.FromArgb(170, 0, 0, 0), new RectangleF(bx2 - P(2), by2 - P(2), bw + P(4), bh + P(4)), P(4));
+        Color c = frac > 0.6 ? Color.FromArgb(61, 220, 132) : frac > 0.3 ? Color.FromArgb(245, 184, 65) : Color.FromArgb(255, 80, 80);
+        if (draining) c = Blend(c, Color.White, 0.25 + 0.25 * Math.Sin(sw.Elapsed.TotalSeconds * 30));
+        if (frac > 0) FillRound(g, c, new RectangleF(bx2, by2, bw * (float)Math.Min(1, frac), bh), P(3));
+    }
+
+    // ---------- ranks ----------
+    static readonly string[] RankNames = { "Iron", "Bronze", "Silver", "Gold", "Platinum", "Diamond", "Elite", "Champion" };
+    static readonly Color[] RankColors = {
+        Color.FromArgb(130, 132, 140), Color.FromArgb(196, 130, 72), Color.FromArgb(196, 206, 220), Color.FromArgb(244, 196, 58),
+        Color.FromArgb(56, 210, 196), Color.FromArgb(110, 170, 255), Color.FromArgb(200, 96, 255), Color.FromArgb(255, 76, 92) };
+
+    // Score needed for each rank above Iron; harder difficulties need less.
+    static double[] RankSteps(string m, int d, out bool lower)
+    {
+        double[] f = { 1.15, 1, 0.85, 0.7 };
+        double k = d >= 0 && d < 4 ? f[d] : 1;
+        lower = m == RCT;
+        double[] t = m == TRK ? new double[] { 25, 35, 45, 55, 65, 75, 85 }
+            : m == FLK ? new double[] { 10, 16, 22, 28, 35, 42, 50 }
+            : m == BOT ? new double[] { 5, 9, 13, 17, 22, 27, 33 }
+            : m == HTK ? new double[] { 2, 4, 6, 8, 10, 13, 16 }
+            : m == RCT ? new double[] { 330, 290, 260, 235, 210, 190, 170 }
+            : null;
+        if (t != null && !lower) t = t.Select(x => Math.Round(x * k, m == TRK ? 0 : 0)).ToArray();
+        return t;
+    }
+    static int RankIndex(string m, int d, double score)
+    {
+        bool lower;
+        var t = RankSteps(m, d, out lower);
+        if (t == null) return -1;
+        int r = 0;
+        for (int i = 0; i < t.Length; i++) if (lower ? score <= t[i] : score >= t[i]) r = i + 1;
+        return r;
+    }
+
+    void DrawRankBadge(Graphics g, float x, float y, float size, int rank, double reveal)
+    {
+        if (rank < 0) return;
+        Color c = RankColors[rank];
+        float s = size * (float)(0.6 + 0.4 * Math.Min(1, reveal));
+        float cx2 = x + size / 2, cy2 = y + size / 2;
+        // glow
+        using (var gp = new GraphicsPath())
+        {
+            gp.AddEllipse(cx2 - s, cy2 - s, s * 2, s * 2);
+            using (var pb = new PathGradientBrush(gp) { CenterColor = Color.FromArgb((int)(110 * Math.Min(1, reveal)), c), SurroundColors = new[] { Color.FromArgb(0, c) } })
+                g.FillPath(pb, gp);
+        }
+        // shield shape with a chevron per rank step
+        var pts = new[] { new PointF(cx2, cy2 - s * 0.5f), new PointF(cx2 + s * 0.42f, cy2 - s * 0.32f), new PointF(cx2 + s * 0.36f, cy2 + s * 0.18f),
+            new PointF(cx2, cy2 + s * 0.5f), new PointF(cx2 - s * 0.36f, cy2 + s * 0.18f), new PointF(cx2 - s * 0.42f, cy2 - s * 0.32f) };
+        using (var b = new LinearGradientBrush(new PointF(cx2, cy2 - s / 2), new PointF(cx2, cy2 + s / 2), Blend(c, Color.White, 0.35), Blend(c, Color.Black, 0.35)))
+            g.FillPolygon(b, pts);
+        using (var pen = new Pen(Blend(c, Color.White, 0.6), P(2.5f))) g.DrawPolygon(pen, pts);
+        int chevrons = Math.Min(3, rank / 2 + 1);
+        using (var pen = new Pen(Color.FromArgb(230, 255, 255, 255), s * 0.06f) { LineJoin = LineJoin.Round, StartCap = LineCap.Round, EndCap = LineCap.Round })
+            for (int i = 0; i < chevrons; i++)
+            {
+                float yy = cy2 - s * 0.14f + i * s * 0.14f;
+                g.DrawLines(pen, new[] { new PointF(cx2 - s * 0.18f, yy), new PointF(cx2, yy + s * 0.1f), new PointF(cx2 + s * 0.18f, yy) });
+            }
+    }
+
+    // ---------- gun skins ----------
+    class Skin { public string Id, Name, Need = ""; public int Rank = -1, BotKills; public Color Body, Trim, Glow; }
+    static readonly Skin[] Skins = {
+        new Skin { Id = "standard", Name = "Standard", Body = Color.FromArgb(64, 68, 76), Trim = Color.FromArgb(34, 36, 42), Glow = Color.FromArgb(130, 136, 146) },
+        new Skin { Id = "neon", Name = "Neon Pulse", Body = Color.FromArgb(18, 18, 26), Trim = Color.FromArgb(32, 32, 44), Glow = Color.FromArgb(25, 230, 232) },
+        new Skin { Id = "arctic", Name = "Arctic", Body = Color.FromArgb(222, 232, 240), Trim = Color.FromArgb(140, 160, 182), Glow = Color.FromArgb(110, 196, 255) },
+        new Skin { Id = "crimson", Name = "Crimson", Body = Color.FromArgb(124, 18, 30), Trim = Color.FromArgb(58, 10, 16), Glow = Color.FromArgb(255, 70, 85), BotKills = 15, Need = "Get 15 kills in one Bots round" },
+        new Skin { Id = "dragon", Name = "Dragon Fire", Body = Color.FromArgb(70, 16, 10), Trim = Color.FromArgb(34, 8, 6), Glow = Color.FromArgb(255, 140, 40), Rank = 3, Need = "Reach Gold rank in any mode" },
+        new Skin { Id = "glitch", Name = "Glitch", Body = Color.FromArgb(28, 12, 44), Trim = Color.FromArgb(14, 6, 24), Glow = Color.FromArgb(255, 60, 220), Rank = 4, Need = "Reach Platinum rank in any mode" },
+        new Skin { Id = "gold", Name = "Gold", Body = Color.FromArgb(206, 160, 56), Trim = Color.FromArgb(128, 94, 26), Glow = Color.FromArgb(255, 238, 170), Rank = 5, Need = "Reach Diamond rank in any mode" },
+        new Skin { Id = "void", Name = "Void", Body = Color.FromArgb(8, 8, 14), Trim = Color.FromArgb(4, 4, 8), Glow = Color.FromArgb(170, 90, 255), Rank = 7, Need = "Reach Champion rank in any mode" }
+    };
+    bool Unlocked(Skin s) { return (s.Rank < 0 || bestRankEver >= s.Rank) && (s.BotKills == 0 || bestBotKills >= s.BotKills); }
+    Skin CurrentSkin { get { var s = Skins.FirstOrDefault(x => x.Id == skinId); return s != null && Unlocked(s) ? s : Skins[0]; } }
+    static PointF Pt(float x, float y) { return new PointF(x, y); }
+
+    void DrawGun(Graphics g, float W, float H, double t)
+    {
+        float k = H / 1080f * 0.85f;
+        float px = W * 0.80f + (float)(sway * 3 + recoil * 14) * k;
+        float py = H * 0.92f + (float)(recoil * 26 + Math.Sin(t * 1.6) * 3) * k;
+        DrawGunModel(g, px, py, k, 12 + (float)recoil * 5, t, CurrentSkin, gunId, muzzleT > 0, true);
+    }
+
+    // Draws one of the two original guns, pointing left, with the skin's colors and animated pattern.
+    void DrawGunModel(Graphics g, float px, float py, float k, float angle, double t, Skin s, string gun, bool flash, bool hands)
+    {
+        var st = g.Save();
+        g.TranslateTransform(px, py); g.RotateTransform(angle); g.ScaleTransform(k, k);
+        bool kes = gun == "kestrel";
+        float muzzleX = kes ? -570 : -540;
+
+        if (hands)
+            using (var sleeve = new SolidBrush(Color.FromArgb(44, 48, 58)))
+            {
+                g.FillPolygon(sleeve, new[] { Pt(-330, 40), Pt(-268, 36), Pt(-140, 340), Pt(-280, 340) });   // left forearm
+                g.FillPolygon(sleeve, new[] { Pt(40, 90), Pt(110, 70), Pt(320, 300), Pt(160, 340) });        // right forearm
+            }
+
+        using (var trim = new SolidBrush(Blend(s.Trim, Color.FromArgb(150, 156, 168), 0.22)))
+        {
+            // magazine and grip sit behind the body
+            g.FillPolygon(trim, kes ? new[] { Pt(-146, 38), Pt(-92, 38), Pt(-92, 152), Pt(-146, 152) }
+                                    : new[] { Pt(-152, 44), Pt(-96, 44), Pt(-74, 140), Pt(-136, 154) });
+            g.FillPolygon(trim, new[] { Pt(14, 38), Pt(58, 38), Pt(82, 126), Pt(34, 132) });
+            if (kes) FillRound(g, Blend(s.Trim, Color.FromArgb(150, 156, 168), 0.22), RectangleF.FromLTRB(-575, -24, -330, 22), 18);   // suppressor
+            else
+            {
+                g.FillRectangle(trim, RectangleF.FromLTRB(-505, -12, -380, 6));                // barrel
+                g.FillRectangle(trim, RectangleF.FromLTRB(-545, -19, -500, 13));               // muzzle brake
+                g.FillRectangle(trim, RectangleF.FromLTRB(-472, -38, -462, -12));              // front sight
+            }
+            g.FillRectangle(trim, RectangleF.FromLTRB(-132, -64, 12, -42));                    // top rail
+        }
+
+        using (var body = new GraphicsPath { FillMode = FillMode.Winding })
+        {
+            body.AddPolygon(new[] { Pt(60, -34), Pt(236, -48), Pt(258, 46), Pt(70, 34) });                       // stock
+            body.AddPolygon(kes ? new[] { Pt(-214, -36), Pt(72, -40), Pt(82, 38), Pt(-204, 40) }
+                                : new[] { Pt(-204, -44), Pt(72, -44), Pt(84, 40), Pt(-192, 46) });                // receiver
+            body.AddRectangle(kes ? RectangleF.FromLTRB(-334, -28, -204, 26) : RectangleF.FromLTRB(-388, -32, -196, 30)); // handguard
+            using (var b = new SolidBrush(s.Body)) g.FillPath(b, body);
+
+            var clip = g.Clip; g.SetClip(body, CombineMode.Intersect);
+            DrawSkinPattern(g, s, t);
+            using (var shade = new LinearGradientBrush(new PointF(0, -50), new PointF(0, 50), Color.FromArgb(50, 255, 255, 255), Color.FromArgb(80, 0, 0, 0)))
+                g.FillRectangle(shade, -600, -60, 900, 120);
+            g.Clip = clip;
+            using (var pen = new Pen(Blend(s.Trim, Color.Black, 0.3), 3)) g.DrawPath(pen, body);
+        }
+        // vents on the handguard
+        using (var vent = new SolidBrush(Color.FromArgb(120, 0, 0, 0)))
+            for (int i = 0; i < 5; i++) g.FillRectangle(vent, (kes ? -320 : -370) + i * 30, -10, 16, 6);
+
+        if (hands)
+            using (var glove = new SolidBrush(Color.FromArgb(28, 30, 36)))
+            {
+                g.FillEllipse(glove, -352, -4, 110, 62);   // left hand on the handguard
+                g.FillEllipse(glove, 10, 50, 86, 96);      // right hand on the grip
+            }
+
+        if (flash)
+        {
+            var star = new List<PointF>();
+            for (int i = 0; i < 12; i++)
+            {
+                double a = i * Math.PI / 6, r = i % 2 == 0 ? 70 : 26;
+                star.Add(Pt(muzzleX - 30 + (float)(Math.Cos(a) * r * 1.4), -3 + (float)(Math.Sin(a) * r)));
+            }
+            using (var b = new SolidBrush(Color.FromArgb(230, 255, 210, 110))) g.FillPolygon(b, star.ToArray());
+            using (var b = new SolidBrush(Color.FromArgb(240, 255, 255, 230))) g.FillEllipse(b, muzzleX - 52, -24, 44, 42);
+        }
+        g.Restore(st);
+    }
+
+    void DrawSkinPattern(Graphics g, Skin s, double t)
+    {
+        switch (s.Id)
+        {
+            case "neon":
+                {
+                    int a = (int)(140 + 100 * Math.Sin(t * 4));
+                    using (var pen = new Pen(Color.FromArgb(a, s.Glow), 4))
+                        foreach (int y in new[] { -22, 2, 24 }) g.DrawLine(pen, -400, y, 250, y - 6);
+                    break;
+                }
+            case "arctic":
+            case "crimson":
+                using (var pen = new Pen(Color.FromArgb(s.Id == "arctic" ? 110 : 170, s.Id == "arctic" ? s.Trim : s.Glow), 14))
+                    for (int x = -420; x < 300; x += 70) g.DrawLine(pen, x, -60, x + 60, 60);
+                break;
+            case "dragon":
+                {
+                    float off = (float)(t * 140 % 200);
+                    using (var b = new LinearGradientBrush(new PointF(-400 + off, 0), new PointF(-300 + off, -40), Color.FromArgb(220, s.Glow), Color.FromArgb(0, 255, 40, 0)) { WrapMode = WrapMode.TileFlipXY })
+                        g.FillRectangle(b, -420, -60, 700, 120);
+                    break;
+                }
+            case "glitch":
+                {
+                    var r = new Random((int)(t * 12));
+                    for (int i = 0; i < 4; i++)
+                        using (var b = new SolidBrush(Color.FromArgb(150, i % 2 == 0 ? s.Glow : Color.FromArgb(40, 230, 255))))
+                            g.FillRectangle(b, -420 + r.Next(500), -50 + r.Next(90), 60 + r.Next(160), 4 + r.Next(10));
+                    break;
+                }
+            case "gold":
+                {
+                    float x = (float)(-700 + t * 450 % 1300);
+                    using (var b = new SolidBrush(Color.FromArgb(120, 255, 255, 240)))
+                        g.FillPolygon(b, new[] { Pt(x, -60), Pt(x + 60, -60), Pt(x + 10, 60), Pt(x - 50, 60) });
+                    break;
+                }
+            case "void":
+                for (int i = 0; i < 26; i++)
+                {
+                    float x = -400 + (i * 97 % 640), y = -40 + (i * 53 % 80);
+                    int a = (int)(140 + 110 * Math.Sin(t * 3 + i));
+                    using (var b = new SolidBrush(Color.FromArgb(Math.Max(0, a), i % 3 == 0 ? Color.White : s.Glow))) g.FillEllipse(b, x, y, 4, 4);
+                }
+                break;
+            default:
+                using (var pen = new Pen(Color.FromArgb(90, s.Trim), 3)) { g.DrawLine(pen, -180, -20, 40, -20); g.DrawLine(pen, -180, 20, 40, 20); }
+                break;
+        }
+    }
+
+    // ---------- animated menu background ----------
+    void DrawMenuBg(Graphics g)
+    {
+        float W = ClientSize.Width, H = ClientSize.Height;
+        double t = sw.Elapsed.TotalSeconds;
+        g.Clear(UiBg);
+        Color c = Accent;
+        foreach (var blob in new[] { new[] { 0.78, 0.12, 0.55, 0.0 }, new[] { 0.12, 0.85, 0.45, 2.0 } })
+        {
+            float bx3 = W * (float)(blob[0] + 0.04 * Math.Sin(t * 0.3 + blob[3])), by3 = H * (float)(blob[1] + 0.05 * Math.Cos(t * 0.25 + blob[3])), r = W * (float)blob[2];
+            using (var gp = new GraphicsPath())
+            {
+                gp.AddEllipse(bx3 - r, by3 - r, r * 2, r * 2);
+                using (var pb = new PathGradientBrush(gp) { CenterColor = Color.FromArgb(26, blob[3] == 0 ? c : Color.FromArgb(255, 70, 85)), SurroundColors = new[] { Color.FromArgb(0, c) } })
+                    g.FillPath(pb, gp);
+            }
+        }
+        float step = P(48), offs = (float)(t * 8 % step);
+        using (var pen = new Pen(Color.FromArgb(10, 255, 255, 255), 1))
+        {
+            for (float x = -step + offs; x < W; x += step) g.DrawLine(pen, x, 0, x, H);
+            for (float y = -step + offs; y < H; y += step) g.DrawLine(pen, 0, y, W, y);
+        }
+    }
+
+    // ---------- loadout screen ----------
+    void PaintLoadout(Graphics g)
+    {
+        float W = ClientSize.Width, H = ClientSize.Height, m = P(40);
+        double t = sw.Elapsed.TotalSeconds;
+        DrawMenuBg(g);
+        AddBtn(g, new RectangleF(m, m, P(100), P(38)), "‹  Back", () => GoGame(game), false, false);
+        DrawT(g, "LOADOUT", fTitle, TextC, m - P(2), m + P(54));
+        DrawT(g, "Pick the gun and skin you see during Flick and Bots.", fBody, Muted, m + 1, m + P(106));
+
+        // preview
+        var pv = new RectangleF(m, m + P(150), W - 2 * m, H * 0.36f);
+        FillRound(g, Color.FromArgb(200, Panel), pv, P(16));
+        DrawRound(g, Blend(Line, CurrentSkin.Glow, 0.4), pv, P(16), 1);
+        float pk = pv.Height / 330f;
+        DrawGunModel(g, pv.X + pv.Width * 0.5f + 158 * pk, pv.Y + pv.Height * 0.48f, pk,(float)Math.Sin(t * 0.8) * 2, t, CurrentSkin, gunId, (t % 2.2) < 0.06, false);
+        DrawT(g, CurrentSkin.Name.ToUpper() + "  ·  " + (gunId == "kestrel" ? "KESTREL" : "WARDEN"), fH3, CurrentSkin.Glow == Color.Empty ? TextC : Blend(CurrentSkin.Glow, Color.White, 0.3), pv.X + P(22), pv.Y + P(18));
+
+        // guns
+        float y = pv.Bottom + P(24);
+        DrawT(g, "GUN", fLabel, Muted, m, y);
+        AddBtn(g, new RectangleF(m, y + P(22), P(200), P(42)), "Warden  ·  rifle", () => { gunId = "warden"; Save(); }, false, gunId == "warden");
+        AddBtn(g, new RectangleF(m + P(212), y + P(22), P(220), P(42)), "Kestrel  ·  suppressed", () => { gunId = "kestrel"; Save(); }, false, gunId == "kestrel");
+
+        // options
+        float ox = m + P(470);
+        DrawT(g, "OPTIONS", fLabel, Muted, ox, y);
+        AddBtn(g, new RectangleF(ox, y + P(22), P(200), P(42)), "Show gun: " + (showGun ? "On" : "Off"), () => { showGun = !showGun; Save(); }, false, showGun);
+        AddBtn(g, new RectangleF(ox + P(212), y + P(22), P(170), P(42)), "Sounds: " + (soundOn ? "On" : "Off"), () => { soundOn = !soundOn; Save(); if (soundOn) Sound(2); }, false, soundOn);
+        AddBtn(g, new RectangleF(ox + P(394), y + P(22), P(190), P(42)), "Screen shake: " + (shakeOn ? "On" : "Off"), () => { shakeOn = !shakeOn; Save(); }, false, shakeOn);
+
+        // skins
+        y += P(88);
+        DrawT(g, "SKINS", fLabel, Muted, m, y);
+        if (bestRankEver >= 0) DrawT(g, "Best rank so far: " + RankNames[(int)bestRankEver], fSmall, RankColors[(int)bestRankEver], m + P(70), y - P(1));
+        int cols = 4;
+        float gap = P(12), tw = (W - 2 * m - (cols - 1) * gap) / cols, th = Math.Min(P(92), (H - y - P(30) - m) / 2 - gap);
+        for (int i = 0; i < Skins.Length; i++)
+        {
+            var s = Skins[i];
+            var r = new RectangleF(m + (i % cols) * (tw + gap), y + P(22) + (i / cols) * (th + gap), tw, th);
+            bool open = Unlocked(s), sel = CurrentSkin.Id == s.Id, hover = r.Contains(mouse);
+            FillRound(g, sel ? Blend(Panel, s.Glow, 0.22) : hover && open ? PanelHi : Panel, r, P(12));
+            DrawRound(g, sel ? s.Glow : Line, r, P(12), sel ? 2 : 1);
+            var sw3 = new RectangleF(r.X + P(14), r.Y + P(14), P(44), th - P(28));
+            using (var b = new LinearGradientBrush(sw3, s.Body, s.Glow, 45f)) FillRoundBrush(g, b, sw3, P(8));
+            DrawT(g, s.Name, fH3, open ? TextC : Muted, sw3.Right + P(12), r.Y + P(14));
+            DrawTW(g, open ? (sel ? "Equipped" : "Click to equip") : "Locked · " + s.Need, fSmall, open ? (sel ? s.Glow : Muted) : Muted,
+                new RectangleF(sw3.Right + P(12), r.Y + P(42), r.Right - sw3.Right - P(24), th - P(46)));
+            var sid = s.Id;
+            if (open) AddHit(r, () => { skinId = sid; Save(); });
+        }
+    }
+
+    static void FillRoundBrush(Graphics g, Brush b, RectangleF r, float rad)
+    {
+        using (var p = Round(r, rad)) g.FillPath(b, p);
     }
 
     void Suggest(double m)
@@ -1446,6 +1914,29 @@ class Trainer : Form
         resLines = new List<string>();
         if (hist.Count > 0) resLines.Add("Previous best: " + hist.Max(r => r.Score).ToString("0.0") + "%");
         resLines.Add("Rounds played at this difficulty: " + (hist.Count + 1));
+        TrackingCoach();
+        ShowResults();
+    }
+
+    void FinishHealth()
+    {
+        double pct = totTime > 0 ? onTime / totTime * 100 : 0;
+        var hist = History(HTK, playDiff);
+        resPB = SaveRec(HTK, playDiff, htKills, false);
+        scoreCode = MakeCode("H", playDiff, htKills.ToString(CultureInfo.InvariantCulture));
+        resTitle = game.Name + "  ·  Health Track  ·  " + DiffNames[playDiff];
+        resMain = htKills.ToString();
+        resLabel = "targets tracked down in 30 seconds";
+        resLines = new List<string>();
+        resLines.Add(string.Format("Time on target: {0:0.0}%", pct));
+        if (htTtk.Count > 0) resLines.Add(string.Format("Average time to kill: {0:0.00} s", htTtk.Average()));
+        if (hist.Count > 0) resLines.Add("Previous best: " + hist.Max(r => r.Score).ToString("0") + " kills");
+        TrackingCoach();
+        ShowResults();
+    }
+
+    void TrackingCoach()
+    {
         showCoach = true;
         coachHead = "SENSITIVITY COACH";
         double m = 1;
@@ -1467,7 +1958,6 @@ class Trainer : Form
             else coachText = "Your tracking looks balanced: you're not over-correcting and not falling behind. Your sensitivity suits you here.";
         }
         Suggest(m);
-        ShowResults();
     }
 
     void FinishFlick()
@@ -1685,6 +2175,7 @@ class Trainer : Form
         else if (scr == Scr.Home) PaintHome(g);
         else if (scr == Scr.Game) PaintGame(g);
         else if (scr == Scr.Play) PaintPlay(g);
+        else if (scr == Scr.Loadout) PaintLoadout(g);
         else PaintResults(g);
         if (MusicVisible && scr == Scr.Play) PaintMusicInRound(g);
         else if (MusicVisible && scr != Scr.Setup) PaintMusicBar(g);
@@ -1838,7 +2329,7 @@ class Trainer : Form
     void PaintSetup(Graphics g)
     {
         float W = ClientSize.Width, H = ClientSize.Height;
-        g.Clear(UiBg);
+        DrawMenuBg(g);
         bool first = playerName == "";
         float pw = P(540), ph = P(480);
         var r = new RectangleF((W - pw) / 2, (H - ph) / 2, pw, ph);
@@ -1861,7 +2352,7 @@ class Trainer : Form
     void PaintHome(Graphics g)
     {
         float W = ClientSize.Width, H = ClientSize.Height, m = P(48);
-        g.Clear(UiBg);
+        DrawMenuBg(g);
         DrawT(g, AppName.ToUpper(), fTitle, TextC, m, m);
         DrawT(g, "Playing as " + playerName + "  ·  " + globalDpi + " DPI.  Pick the game you want to practise for.", fBody, Muted, m + 2, m + P(56));
         AddBtn(g, new RectangleF(W - m - P(100), m, P(100), P(40)), "Exit", Close, false, false);
@@ -1928,8 +2419,9 @@ class Trainer : Form
     void PaintGame(Graphics g)
     {
         float W = ClientSize.Width, H = ClientSize.Height, m = P(40);
-        g.Clear(UiBg);
+        DrawMenuBg(g);
         AddBtn(g, new RectangleF(m, m, P(100), P(38)), "‹  Back", GoHome, false, false);
+        AddBtn(g, new RectangleF(m + P(112), m, P(130), P(38)), "Loadout", () => { scr = Scr.Loadout; ShowBoxes(false); }, false, false);
         DrawT(g, game.Name.ToUpper(), fTitle, game.Accent, m - P(2), m + P(54));
         DrawT(g, game.Tagline, fBody, Muted, m + 1, m + P(106));
         float top = m + P(156);
@@ -1964,15 +2456,16 @@ class Trainer : Form
         // modes
         float x2 = sp.Right + P(28), w2 = W - x2 - m;
         DrawT(g, "MODE", fLabel, Muted, x2, top);
-        string[] modes = { TRK, FLK, BOT, RCT, FND };
+        string[] modes = { TRK, HTK, FLK, BOT, RCT, FND };
         string[] desc = {
             "Keep your crosshair on a moving ball. Score is the % of time on target.",
+            "No clicking: stay on the ball to drain its health. Kill it and a new one appears.",
             "Snap to targets as they pop up and click. 30 seconds.",
             "Strafing and standing bots with 3 HP. Headshots kill instantly.",
             "Click the moment the screen turns green. 5 tries.",
             "5 short tracking rounds at hidden sens values. Finds the one you aim best with." };
-        float gap = P(14), cw = (w2 - 4 * gap) / 5, ch = P(140);
-        for (int i = 0; i < 5; i++)
+        float gap = P(12), cw = (w2 - 5 * gap) / 6, ch = P(150);
+        for (int i = 0; i < modes.Length; i++)
         {
             var r = new RectangleF(x2 + i * (cw + gap), top + P(26), cw, ch);
             bool sel = mode == modes[i], hover = r.Contains(mouse);
@@ -1984,7 +2477,7 @@ class Trainer : Form
             AddHit(r, () => mode = mi);
         }
         float y = top + P(26) + ch + P(26);
-        if (mode == TRK || mode == FLK || mode == BOT)
+        if (mode == TRK || mode == HTK || mode == FLK || mode == BOT)
         {
             DrawT(g, "DIFFICULTY", fLabel, Muted, x2, y);
             for (int i = 0; i < 4; i++)
@@ -2026,7 +2519,7 @@ class Trainer : Form
     {
         if (m == TRK) return v.ToString("0.0") + "%";
         if (m == FLK) return v.ToString("0") + " hits";
-        if (m == BOT) return v.ToString("0") + " kills";
+        if (m == BOT || m == HTK) return v.ToString("0") + " kills";
         return v.ToString("0") + " ms";
     }
 
@@ -2068,6 +2561,21 @@ class Trainer : Form
         float W = ClientSize.Width, H = ClientSize.Height, m = P(28);
         if (playMode == RCT) { PaintReaction(g); return; }
         g.Clear(game.Bg);
+        // soft colored glow behind the arena
+        using (var glow = new GraphicsPath())
+        {
+            glow.AddEllipse(W * 0.15f, H * 0.05f, W * 0.7f, H * 0.9f);
+            using (var pb = new PathGradientBrush(glow) { CenterColor = Color.FromArgb(34, game.Accent), SurroundColors = new[] { Color.FromArgb(0, game.Accent) } })
+                g.FillPath(pb, glow);
+        }
+
+        // everything in the world shakes a little on kills
+        var saved = g.Save();
+        if (shakeT > 0)
+        {
+            float amp = (float)(shakeT * 40 * S);
+            g.TranslateTransform((float)((rnd.NextDouble() - 0.5) * amp), (float)((rnd.NextDouble() - 0.5) * amp));
+        }
         FillRound(g, Blend(game.Bg, Color.White, 0.025f), arena, P(18));
         DrawRound(g, Blend(game.Bg, Color.White, 0.07f), arena, P(18), 1);
 
@@ -2087,7 +2595,27 @@ class Trainer : Form
             }
         }
         else if (playMode == BOT) foreach (var b in bots.OrderBy(x => x.U)) DrawBot(g, b);
-        else DrawTarget(g, bx, by + jumpOff, br, countdown <= 0 && Hit(cx - bx, cy - (by + jumpOff), br));
+        else
+        {
+            bool onBall = countdown <= 0 && Hit(cx - bx, cy - (by + jumpOff), br);
+            DrawTarget(g, bx, by + jumpOff, br, onBall);
+            if (playMode == HTK) DrawHealthBar(g, bx, by + jumpOff - br - P(14), br * 2.4, ballHp / 100, onBall);
+        }
+
+        foreach (var p in fx)
+        {
+            float k = (float)(p.Life / p.MaxLife), s = (float)p.Size * (0.5f + k * 0.5f);
+            using (var b = new SolidBrush(Color.FromArgb((int)(255 * k), p.C))) g.FillEllipse(b, (float)p.X - s, (float)p.Y - s, s * 2, s * 2);
+        }
+        foreach (var t in floats)
+        {
+            int a = (int)(255 * Math.Min(1, t.Life / 0.4));
+            DrawTC(g, t.Text, fH3, Color.FromArgb(a, t.C), new RectangleF((float)t.X - P(120), (float)t.Y - P(14), P(240), P(28)));
+        }
+        g.Restore(saved);
+
+        if ((playMode == FLK || playMode == BOT) && showGun && countdown <= 0) DrawGun(g, W, H, sw.Elapsed.TotalSeconds);
+        if (flashT > 0) using (var b = new SolidBrush(Color.FromArgb((int)(flashT / 0.08 * 60), Color.White))) g.FillRectangle(b, 0, 0, W, H);
 
         // HUD
         string left = playMode == FND
@@ -2102,14 +2630,39 @@ class Trainer : Form
             ? hits + " hits  ·  " + (hits + misses > 0 ? (hits * 100 / (hits + misses)) + "% accuracy" : "–")
             : playMode == BOT
             ? kills + " kills  ·  " + (botHits > 0 ? (headHits * 100 / botHits) + "% headshots" : "–")
+            : playMode == HTK
+            ? htKills + " kills  ·  " + (totTime > 0 ? (onTime / totTime * 100).ToString("0") : "0") + "% on target"
             : (totTime > 0 ? (onTime / totTime * 100).ToString("0") : "0") + "% on target";
         float sw2 = g.MeasureString(score, fH3).Width;
         DrawT(g, score, fH3, TextC, W - m - sw2, m - P(4));
         DrawTC(g, "Esc to stop", fSmall, Muted, new RectangleF(0, H - m - P(20), W, P(20)));
 
+        // combo counter under the timer
+        if (combo >= 3)
+        {
+            float scale = 1 + (float)comboPop * 0.35f;
+            using (var f = new Font("Bahnschrift", 30 * scale, FontStyle.Bold))
+                DrawTC(g, "×" + combo, f, Blend(game.Accent, Color.White, comboPop * 0.6), new RectangleF(0, bar.Bottom + P(36), W, P(60) * scale));
+            DrawTC(g, "COMBO", fLabel, Muted, new RectangleF(0, bar.Bottom + P(36) + P(56) * scale, W, P(18)));
+        }
+
+        // kill feed under the score
+        float fy = m + P(30);
+        foreach (var it in feed)
+        {
+            int a = (int)(255 * Math.Min(1, it.Life / 0.5));
+            string txt = (it.Head ? "HS  " : "»  ") + it.Text;
+            float tw = g.MeasureString(txt, fSmall).Width + P(20);
+            var r = new RectangleF(W - m - tw, fy, tw, P(26));
+            FillRound(g, Color.FromArgb(a * 150 / 255, 0, 0, 0), r, P(6));
+            if (it.Head) FillRound(g, Color.FromArgb(a, 255, 70, 85), new RectangleF(r.X, r.Y, P(3), r.Height), P(1.5f));
+            DrawTC(g, txt, fSmall, Color.FromArgb(a, it.Head ? Color.FromArgb(255, 120, 130) : TextC), r);
+            fy += P(30);
+        }
+
         if (countdown > 0)
         {
-            string sub = playMode == FND && fIdx > 0 ? "Next round, new hidden sensitivity" : (playMode == FLK ? "Click the targets as they appear" : playMode == BOT ? "Body shots do 1 damage. Headshots kill instantly." : "Keep your crosshair on the ball");
+            string sub = playMode == FND && fIdx > 0 ? "Next round, new hidden sensitivity" : (playMode == FLK ? "Click the targets as they appear" : playMode == BOT ? "Body shots do 1 damage. Headshots kill instantly." : playMode == HTK ? "No clicking. Stay on the ball to drain its health." : "Keep your crosshair on the ball");
             DrawTC(g, Math.Ceiling(countdown).ToString("0"), fHuge, TextC, new RectangleF(0, H * 0.18f, W, P(130)));
             DrawTC(g, sub, fBody, Muted, new RectangleF(0, H * 0.18f + P(130), W, P(30)));
         }
@@ -2239,19 +2792,50 @@ class Trainer : Form
     void PaintResults(Graphics g)
     {
         float W = ClientSize.Width, H = ClientSize.Height, m = P(48);
-        g.Clear(UiBg);
+        DrawMenuBg(g);
         DrawT(g, resTitle.ToUpper(), fLabel, Muted, m, m);
-        DrawT(g, resMain, fHuge, game.Accent, m - P(6), m + P(24));
+        // the score rolls up, then lands with a flash
+        double since = sw.Elapsed.TotalSeconds - resAnimStart, k = Math.Min(1, since / 0.9), ease = 1 - Math.Pow(1 - k, 3);
+        string shown = resMain;
+        if (k < 1 && playMode != FND)
+        {
+            double v = resScore * ease;
+            shown = playMode == TRK ? v.ToString("0.0") + "%" : playMode == RCT ? v.ToString("0") + " ms" : v.ToString("0");
+        }
+        double land = since - 0.9;
+        Color mainC = land > 0 && land < 0.25 ? Blend(game.Accent, Color.White, 1 - land / 0.25) : game.Accent;
+        DrawT(g, shown, fHuge, mainC, m - P(6), m + P(24));
         float mainW = g.MeasureString(resMain, fHuge).Width;
+        float bx4 = m + mainW + P(10);
+        if (resRank >= 0)
+        {
+            double reveal = Math.Max(0, (since - 0.8) / 0.35);
+            DrawRankBadge(g, bx4, m + P(18), P(120), resRank, reveal);
+            if (reveal > 0)
+            {
+                DrawT(g, RankNames[resRank].ToUpper(), fH2, RankColors[resRank], bx4 + P(124), m + P(44));
+                bool lower; var steps = RankSteps(playMode, playDiff, out lower);
+                string next = resRank < 7 ? "Next: " + RankNames[resRank + 1] + " at " + FmtScore(playMode, steps[resRank]) : "Top rank!";
+                DrawT(g, next, fSmall, Muted, bx4 + P(126), m + P(80));
+            }
+            bx4 += P(124) + P(150);
+        }
         if (resPB)
         {
-            var badge = new RectangleF(m + mainW + P(6), m + P(70), P(180), P(34));
+            var badge = new RectangleF(bx4, m + P(110), P(180), P(34));
             FillRound(g, Good, badge, P(17));
             DrawTC(g, "NEW PERSONAL BEST", fLabel, Color.FromArgb(10, 30, 16), badge);
         }
         DrawT(g, resLabel, fBody, Muted, m, m + P(150));
         float y = m + P(196);
         foreach (var l in resLines) { DrawT(g, l, fBody, TextC, m, y); y += P(30); }
+        if (playMode == FLK || playMode == BOT || playMode == HTK) { if (bestCombo >= 3) { DrawT(g, "Best combo: ×" + bestCombo, fBody, TextC, m, y); y += P(30); } }
+        foreach (var u in newUnlocks)
+        {
+            var s = Skins.First(x => x.Name == u);
+            DrawT(g, "NEW SKIN UNLOCKED: " + u.ToUpper() + "  ·  equip it in Loadout", fH3, Blend(s.Glow, Color.White, 0.2 + 0.2 * Math.Sin(since * 6)), m, y + P(4));
+            y += P(34);
+        }
 
         float colW = Math.Min(P(560), W / 2 - m * 1.5f);
         if (playMode == FND && fScores != null) DrawFinderChart(g, new RectangleF(m, y + P(20), colW, P(220)));
