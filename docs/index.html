@@ -28,6 +28,7 @@
       <a class="hide-sm" href="#features">Features</a>
       <a class="hide-sm" href="#changelog">Updates</a>
       <a href="board.html">Leaderboard</a>
+      <a class="btn small cyan" href="play.html">Play</a>
       <a class="btn small primary dl-link" href="#">Download</a>
     </div>
   </div>
@@ -36,17 +37,21 @@
 <header class="hero" id="top">
   <div class="wrap">
     <div class="hero-copy reveal">
-      <span class="eyebrow">Free · Windows 10 &amp; 11</span>
+      <span class="eyebrow" id="hero-eyebrow">Free · Windows app · or play in your browser</span>
       <h1>Aim like it <span class="hl">counts.</span></h1>
       <p class="lead">An aim trainer that moves exactly like your game. Put in your Valorant, CS2 or Fortnite sensitivity and every flick, track and headshot feels the same as in-game. Then a coach tells you if your sens is holding you back.</p>
-      <div class="hero-cta">
-        <a class="btn primary btn-download dl-link" href="#">
+      <div class="hero-cta" id="download">
+        <a class="btn primary btn-download dl-link" id="cta-download" href="#">
           <svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m0 0l-5-5m5 5l5-5M4 19h16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
-          Download free
+          <span id="cta-download-text">Download for Windows</span>
         </a>
-        <a class="btn" href="board.html">View leaderboard</a>
+        <a class="btn cyan btn-download" id="cta-play" href="play.html" style="font-size:17px;padding:16px 24px">
+          <svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4l13 8-13 8z" fill="currentColor"/></svg>
+          Play in browser
+        </a>
       </div>
       <div class="dl-meta" id="dl-meta">Latest version · Windows 10/11 · no install needed</div>
+      <div class="platform-note" id="platform-note">On a Mac, Chromebook or Linux? <a href="play.html">Play in your browser</a>, no download needed.</div>
     </div>
 
     <div class="demo reveal" id="demo">
@@ -178,7 +183,7 @@
       <details><summary>How do I find my mouse DPI?</summary>
         <p>Open your mouse software (Logitech G Hub, Razer Synapse, SteelSeries GG and so on). Most gaming mice ship at 800 or 1600 DPI. DPI only changes the cm/360 number shown; your aim already feels the same as in-game.</p></details>
       <details><summary>Does it work on Mac or phones?</summary>
-        <p>The app is Windows 10 and 11 only. The leaderboard works on any device.</p></details>
+        <p>Yes. <a href="play.html">Play in your browser</a> on Mac, Chromebook or Linux, with all five modes, the sens coach and leaderboard submit. Use Chrome or Edge for exact sensitivity. A Mac app is on the way; the Windows app adds music, lyrics and Discord status.</p></details>
       <details><summary>How do I get on the leaderboard?</summary>
         <p>Copy the score code from the results screen, make a free account on the leaderboard and submit it. You rank right away as Unverified. To get the ✓ Verified badge, record the round (Xbox Game Bar: Win+Alt+R, or Medal) and add the clip; a mod reviews it within 1–3 business days.</p></details>
       <details><summary>Is it free?</summary>
@@ -217,6 +222,19 @@
 <script src="common.js"></script>
 <script>
 document.documentElement.classList.add("js");
+
+// Not on Windows? Lead with the browser version.
+const isWindows = /Windows/i.test(navigator.userAgent), isMac = /Mac OS X|Macintosh/i.test(navigator.userAgent) && !/iPhone|iPad/i.test(navigator.userAgent);
+if (!isWindows) {
+  const play = $("cta-play"), dl = $("cta-download");
+  play.style.fontSize = ""; play.style.padding = "";
+  play.parentNode.insertBefore(play, dl);
+  dl.classList.remove("primary", "btn-download"); dl.style.alignSelf = "center";
+  $("cta-download-text").textContent = "Windows download";
+  play.lastChild.textContent = isMac ? " Play now on your Mac" : " Play now in your browser";
+  $("hero-eyebrow").textContent = isMac ? "Free · Plays on your Mac in the browser" : "Free · Plays in your browser";
+  $("platform-note").textContent = isMac ? "Works best in Chrome or Edge for exact sensitivity. A Mac app is on the way." : "Works best in Chrome or Edge for exact sensitivity.";
+}
 
 // ---------- download buttons: one click, always the newest zip ----------
 document.querySelectorAll(".dl-link").forEach(a => a.href = DOWNLOAD_URL);

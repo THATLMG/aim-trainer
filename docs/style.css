@@ -52,6 +52,13 @@ img { max-width: 100%; }
 .nav .links a { color: var(--muted); font-size: 14px; font-weight: 500; }
 .nav .links a:hover { color: var(--text); }
 @media (max-width: 860px) { .nav .links a.hide-sm { display: none; } }
+@media (max-width: 600px) {
+  .nav .wrap { gap: 10px; }
+  .nav .links { gap: 8px; }
+  .nav .links a:not(.btn) { display: none; }
+  .logo { font-size: 14px; letter-spacing: .04em; white-space: nowrap; }
+}
+@media (max-width: 380px) { .nav .links .btn.cyan { display: none; } }
 
 /* buttons */
 .btn { display: inline-flex; align-items: center; justify-content: center; gap: 10px; border: 1px solid var(--line); background: var(--panel-hi); color: var(--text);
@@ -260,4 +267,26 @@ dialog.auth { border: 1px solid var(--line); border-radius: 16px; background: va
 dialog.auth::backdrop { background: rgba(4, 6, 10, .72); backdrop-filter: blur(4px); }
 dialog.auth input { width: 100%; background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
 .banner { border: 1px solid rgba(255,211,78,.4); background: rgba(255,211,78,.07); border-radius: 12px; padding: 14px 16px; }
+/* ---------- browser game ---------- */
+button.game.pick { text-align: left; cursor: pointer; color: var(--text); font: inherit; }
+.mode-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+.mode-card { text-align: left; border: 1px solid var(--line); background: var(--panel-hi); border-radius: 12px; padding: 14px; display: grid; gap: 6px; align-content: start; }
+.mode-card b { font-family: var(--display); font-size: 17px; }
+.mode-card span { font-size: 13px; color: var(--muted); }
+.mode-card[aria-pressed="true"] { border-color: var(--c); background: color-mix(in srgb, var(--c) 16%, var(--panel)); }
+.mode-card[aria-pressed="true"] b { color: var(--c); }
+.spark { width: 100%; height: 90px; margin-top: 14px; display: block; }
+.res-main { font-family: var(--display); font-weight: 700; font-size: clamp(64px, 10vw, 110px); line-height: 1; }
+#stage { position: fixed; inset: 0; z-index: 200; background: #0b0e14; }
+#stage canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; cursor: none; }
+#stage .overlay { position: absolute; inset: 0; display: grid; place-content: center; justify-items: center; gap: 14px; text-align: center; padding: 20px; background: rgba(7, 9, 13, .75); }
+#stage .big-title { font-family: var(--display); font-size: 52px; font-weight: 700; }
+.finder-chart { display: flex; gap: 10px; align-items: flex-end; height: 200px; margin-top: 14px; }
+.fbar { flex: 1; display: grid; grid-template-rows: auto 1fr auto; height: 100%; text-align: center; gap: 4px; }
+.fbar i { align-self: end; display: block; background: color-mix(in srgb, var(--cyan) 35%, transparent); border-radius: 6px 6px 0 0; }
+.fbar.best i { background: var(--cyan); }
+.fbar .fval, .fbar .flabel { font-family: var(--mono); font-size: 12.5px; color: var(--muted); }
+.fbar.best .flabel { color: var(--cyan); }
+.platform-note { font-size: 14px; color: var(--muted); }
+
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
