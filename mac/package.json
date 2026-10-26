@@ -1,0 +1,11 @@
+{
+  "name": "lmg-aim-trainer-mac",
+  "private": true,
+  "description": "Mac app for LMG's Aim Trainer: the browser game in a native window, plus Discord status.",
+  "scripts": {
+    "tauri": "tauri"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "2.1.0"
+  }
+}

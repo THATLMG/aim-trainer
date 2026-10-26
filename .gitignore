@@ -11,3 +11,11 @@
 !supabase/
 !supabase/*.sql
 !make-images.ps1
+!mac/
+!mac/**
+mac/node_modules/
+mac/src-tauri/target/
+mac/src-tauri/gen/
+mac/src-tauri/icons/
+!.github/
+!.github/**

@@ -36,6 +36,10 @@ let profile = store.get("profile", null);        // { name, dpi }
 let settings = store.get("settings", {});        // gameId -> { sens, dpi }
 let records = store.get("records", []);          // { g, m, d, s, t }
 let gameId = store.get("lastGame", null), mode = TRK, diff = 1, rawInput = null;
+// Browsers without raw mouse input (Safari, the Mac app) report scaled movement; calibration measures the scale.
+let calib = store.get("calib", null);   // { factor }
+const moveFactor = () => (rawInput === false && calib ? calib.factor : 1);
+let CAL = null;                         // calibration in progress
 
 const sensOf = id => (settings[id] && settings[id].sens) || GP[id].def;
 const dpiOf = id => (settings[id] && settings[id].dpi) || (profile ? profile.dpi : 800);
@@ -134,6 +138,9 @@ function renderGame() {
 function updateCm() {
   const cm = 360 / (degPerCount(gameId, sensOf(gameId)) * dpiOf(gameId)) * 2.54;
   $("cm360").textContent = cm.toFixed(1) + " cm";
+  const row = $("mouse-row"); row.textContent = "";
+  row.append(el("span", { class: "muted", style: "font-size:14px", text: calib ? "Mouse calibrated (×" + calib.factor.toFixed(2) + ")" : "Mouse not calibrated · only needed on Mac or in Safari" }),
+    el("button", { class: "btn small", text: calib ? "Recalibrate" : "Calibrate mouse", onclick: startCalibration }));
 }
 function saveSensInputs() {
   const s = parseNum($("sens").value), d = parseNum($("dpi").value);
@@ -199,6 +206,7 @@ function prepare(m) {
 $("start").onclick = () => prepare(mode);
 
 $("stage-go").onclick = async () => {
+  if (CAL) return beginCalibration();
   $("stage-start").hidden = true;
   try { if (stage.requestFullscreen && !document.fullscreenElement) stage.requestFullscreen().catch(() => {}); } catch {}
   if (S.mode !== RCT) await lockPointer();
@@ -225,10 +233,74 @@ async function lockPointer() {
     rawInput = false;
   }
 }
-document.addEventListener("mousemove", e => { if (document.pointerLockElement === cv) { dx += e.movementX; dy += e.movementY; } });
+document.addEventListener("mousemove", e => {
+  if (document.pointerLockElement !== cv) return;
+  if (CAL) { if (CAL.phase === 2) CAL.units += e.movementX; return; }
+  const f = moveFactor();
+  dx += e.movementX * f; dy += e.movementY * f;
+});
 document.addEventListener("pointerlockchange", () => {
+  if (document.pointerLockElement !== cv && CAL && CAL.phase < 3) return endCalibration();
   if (document.pointerLockElement !== cv && S && S.active && S.mode !== RCT) abort();
 });
+
+// ---------- mouse calibration ----------
+function startCalibration() {
+  S = null; CAL = { phase: 0, units: 0 };
+  stage.hidden = false; stage.style.background = "#0b0e14";
+  $("stage-start").hidden = false;
+  $("stage-title").textContent = "Calibrate your mouse";
+  $("stage-hint").textContent = "You'll need a ruler. On a Mac, first turn off pointer acceleration: System Settings → Mouse → Advanced → Pointer acceleration. Then click Start: put the mouse at 0 cm, press Space, slide exactly 10 cm to the right, and press Space again.";
+  $("stage-go").textContent = "Start calibration";
+  size();
+}
+async function beginCalibration() {
+  $("stage-start").hidden = true;
+  await lockPointer();
+  if (rawInput) {
+    calib = null; store.set("calib", null);
+    CAL.phase = 4; drawCalibration();
+    setTimeout(endCalibration, 3000);
+    return;
+  }
+  CAL.phase = 1; drawCalibration();
+}
+function calibrationKey() {
+  if (CAL.phase === 1) { CAL.phase = 2; CAL.units = 0; }
+  else if (CAL.phase === 2) {
+    const expected = dpiOf(gameId) * 10 / 2.54, got = Math.abs(CAL.units);
+    if (got < 20) { CAL.phase = 1; CAL.error = "No movement detected. Try again: Space at 0 cm, slide 10 cm, Space."; }
+    else {
+      CAL.factor = clamp(expected / got, .05, 50);
+      calib = { factor: CAL.factor }; store.set("calib", calib);
+      CAL.phase = 3;
+      if (document.pointerLockElement) document.exitPointerLock();
+    }
+  } else if (CAL.phase === 3) endCalibration();
+  drawCalibration();
+}
+function drawCalibration() {
+  if (!CAL) return;
+  size();
+  ctx.fillStyle = "#0b0e14"; ctx.fillRect(0, 0, W, H);
+  ctx.textAlign = "center"; ctx.fillStyle = "#fff";
+  const big = { 1: "Mouse at 0 cm, press Space", 2: "Slide exactly 10 cm right, then press Space", 3: "Calibrated!", 4: "No calibration needed" }[CAL.phase] || "";
+  const small = CAL.phase === 2 ? "Measured so far: " + Math.abs(CAL.units) + " units"
+    : CAL.phase === 3 ? "Your mouse moves " + Math.round(Math.abs(CAL.units)) + " units per 10 cm. Factor ×" + CAL.factor.toFixed(2) + " saved. Press Space or click to finish."
+    : CAL.phase === 4 ? "This browser already reads your raw mouse movement, so your sens is exact."
+    : (CAL.error || "Keep the mouse flat and slide it in a straight line along the ruler.");
+  ctx.font = "700 44px 'Chakra Petch', sans-serif"; ctx.fillText(big, W / 2, H / 2 - 10);
+  ctx.font = "17px Barlow, sans-serif"; ctx.fillStyle = "rgba(255,255,255,.8)"; ctx.fillText(small, W / 2, H / 2 + 34);
+  ctx.font = "13px Barlow, sans-serif"; ctx.fillStyle = "rgba(255,255,255,.55)"; ctx.fillText("Esc to cancel", W / 2, H - 28);
+  if (CAL.phase === 2) requestAnimationFrame(drawCalibration);
+}
+function endCalibration() {
+  CAL = null;
+  if (document.pointerLockElement) document.exitPointerLock();
+  $("stage-go").textContent = "Start round";
+  show("game");
+}
+cv.addEventListener("click", () => { if (CAL && CAL.phase === 3) endCalibration(); });
 function abort() {
   if (!S) return;
   S.active = false;
@@ -237,6 +309,11 @@ function abort() {
   show("game");
 }
 document.addEventListener("keydown", e => {
+  if (CAL && CAL.phase > 0) {
+    if (e.key === "Escape") endCalibration();
+    else if (e.code === "Space") { e.preventDefault(); calibrationKey(); }
+    return;
+  }
   if (!S || !S.active) return;
   if (e.key === "Escape") abort();
   if (S.mode === RCT && (e.code === "Space" || e.key === "Enter")) { e.preventDefault(); reactionClick(performance.now() / 1000); }
@@ -675,7 +752,47 @@ $("again").onclick = () => prepare(S.mode);
 $("back").onclick = () => show("game");
 $("to-home").onclick = () => show("home");
 $("edit-profile").onclick = () => { renderSetup(); show("setup"); };
-$("stage-cancel").onclick = () => { S = null; show("game"); };
+$("stage-cancel").onclick = () => { S = null; if (CAL) endCalibration(); else show("game"); };
+
+// ---------- Mac app extras: Discord status and update check ----------
+function presenceText() {
+  const vis = v => !$("v-" + v).hidden, g = gameId && GAMES[gameId];
+  const run = g && S ? g.name + " · " + (S.mode === FND ? "Sens finder" : S.mode === RCT ? "Reaction test" : S.mode + " · " + DIFFS[S.diff]) : "";
+  if (!$("stage").hidden && S && S.active) {
+    let st = S.countdown > 0 ? "Get ready…"
+      : S.mode === FLK ? S.hits + " hits · " + (S.hits + S.misses ? Math.round(S.hits * 100 / (S.hits + S.misses)) : 0) + "% accuracy"
+      : S.mode === BOT ? S.kills + " kills · " + (S.botHits ? Math.round(S.headHits * 100 / S.botHits) : 0) + "% headshots"
+      : S.mode === RCT ? "Try " + Math.min(5, S.rTimes.length + 1) + " of 5"
+      : S.mode === FND ? "Round " + Math.min(5, S.fIdx + 1) + " of 5"
+      : (S.tot ? Math.round(S.on / S.tot * 100) : 0) + "% on target";
+    return { details: run, status: st, game: gameId };
+  }
+  if (vis("results") && lastResult && S) {
+    const m = lastResult.main;
+    const st = S.mode === TRK ? m + " on target" : S.mode === FLK ? m + " hits" : S.mode === BOT ? m + " kills" : S.mode === RCT ? m + " average" : "Best sens " + m;
+    return { details: run + " · results", status: st, game: gameId };
+  }
+  if (vis("game") && g) return { details: g.name + " · choosing a mode", status: "Sens " + fmtSens(gameId, sensOf(gameId)), game: gameId };
+  if (vis("setup")) return { details: "Setting up", status: "", game: "" };
+  return { details: "In the menus", status: "", game: "" };
+}
+if (TAURI) {
+  let sent = null;
+  // Discord allows about 5 updates per 20 seconds, so check every 4 seconds and only send changes.
+  setInterval(() => {
+    const p = presenceText(), key = JSON.stringify(p);
+    if (key === sent) return;
+    sent = key;
+    TAURI.core.invoke("set_presence", p).catch(() => { sent = null; });
+  }, 4000);
+  (async () => {
+    try {
+      const mine = await TAURI.app.getVersion(), rs = await releases(), latest = rs[0] && rs[0].tag_name.replace(/^v/, "");
+      const newer = latest && latest.split(".").map(Number).reduce((c, n, i) => c !== 0 ? c : n - (+mine.split(".")[i] || 0), 0) > 0;
+      if (newer) $("update-banner").hidden = false, $("update-text").textContent = "Update available: v" + latest + " (you have v" + mine + ")";
+    } catch {}
+  })();
+}
 
 // ---------- start ----------
 (async () => {

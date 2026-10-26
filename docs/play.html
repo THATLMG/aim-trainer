@@ -45,6 +45,10 @@
       <div class="stack" style="gap:6px"><span class="eyebrow">Play in your browser</span><h2>Pick your game</h2><span class="muted" id="home-who"></span></div>
       <button class="btn" id="edit-profile">Edit profile</button>
     </div>
+    <div class="banner row" id="update-banner" hidden style="justify-content:space-between;align-items:center">
+      <span id="update-text"></span>
+      <a class="btn small primary" href="https://github.com/THATLMG/aim-trainer/releases/latest/download/LMGs-Aim-Trainer-mac.dmg">Download update</a>
+    </div>
     <div class="msg" id="touch-note" hidden>This game needs a mouse. Open this page on a computer (Mac, Windows, Chromebook or Linux) to play.</div>
     <div class="games" id="home-games"></div>
     <p class="muted" style="font-size:14px">Works best in Chrome or Edge, which give the game your raw mouse movement so your sens feels exactly like in-game. Want music, lyrics and Discord status too? <a href="index.html#download">Get the app</a>.</p>
@@ -62,6 +66,7 @@
           <label class="stack" style="gap:6px"><span id="sens-label" class="muted"></span><input type="text" id="sens" inputmode="decimal" style="max-width:180px"></label>
           <label class="stack" style="gap:6px"><span class="muted">Mouse DPI</span><input type="text" id="dpi" inputmode="numeric" style="max-width:180px"></label>
           <div><div class="big" id="cm360"></div><div class="muted" style="font-size:14px">of mouse movement for a full 360° turn</div></div>
+          <div class="row" id="mouse-row" style="justify-content:space-between;align-items:center"></div>
         </div>
         <div class="panel" id="progress"></div>
       </div>

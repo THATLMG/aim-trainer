@@ -19,6 +19,15 @@ const CODE_SECRET = "aimtrainer-board-v1-7Qp2xK";
 const MAX_CLIP = 20 * 1024 * 1024;
 
 const $ = id => document.getElementById(id);
+
+// Inside the Mac app (Tauri), links to other websites open in the real browser instead of the app window.
+const TAURI = window.__TAURI__ || null;
+if (TAURI) document.addEventListener("click", e => {
+  const a = e.target.closest && e.target.closest("a[href]");
+  if (!a) return;
+  const url = new URL(a.href, location.href);
+  if (/^https?:$/.test(url.protocol) && url.host !== location.host) { e.preventDefault(); TAURI.opener.openUrl(url.href).catch(() => {}); }
+});
 function el(tag, props, kids) {
   const n = document.createElement(tag);
   if (props) for (const k in props) {
