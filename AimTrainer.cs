@@ -152,7 +152,7 @@ class Trainer : Form
 
     const string TRK = "Tracking", FLK = "Flick", BOT = "Bots", RCT = "Reaction", FND = "Sens finder", HTK = "Health Track";
     static readonly double[] DrainRate = { 110, 80, 65, 55 };   // health per second while your crosshair is on the ball
-    const string AppVersion = "1.6.2";
+    const string AppVersion = "1.6.3";
     const string Repo = "THATLMG/aim-trainer";
     static readonly string[] DiffNames = { "Easy", "Medium", "Hard", "Insane" };
     static readonly double[] BallR = { 0.045, 0.033, 0.024, 0.017 };
@@ -1687,25 +1687,91 @@ class Trainer : Form
     Skin CurrentSkin { get { var s = Skins.FirstOrDefault(x => x.Id == skinId); return s != null && Unlocked(s) ? s : Skins[0]; } }
     static PointF Pt(float x, float y) { return new PointF(x, y); }
 
+    // In rounds the gun is a first-person viewmodel: low on the right, pointing forward into the screen and angled
+    // slightly toward the crosshair. The side-on drawing below is bent onto a 3D plane with an exact perspective warp.
+    const float GunL = -760, GunT = -130, GunR = 340, GunB = 380;   // the side-on drawing's area, in model units
+    static readonly RectangleF GunArea = RectangleF.FromLTRB(GunL, GunT, GunR, GunB);
+    PointF[] gunWarp;                 // while set, gun shapes are warped onto these 4 screen corners of GunArea
+    Func<PointF, PointF> gunProjPt;   // the same warp for single points (gradient brushes)
+
     void DrawGun(Graphics g, float W, float H, double t)
     {
-        float k = H / 1080f * 0.85f;
         bool pistol = gunId == "sparrow";
-        // The gun pivots from the bottom-right and points at the crosshair, drifting toward it a little like an arm would.
-        float px = W * 0.80f + (cx - W / 2) * 0.12f + (float)(sway * 3 + recoil * 14) * k;
-        float py = H * (pistol ? 0.90f : 0.95f) + (cy - H / 2) * 0.06f + (float)(recoil * 26 + Math.Sin(t * 1.6) * 3) * k;
-        float aim = (float)(Math.Atan2(py - cy, px - cx) * 180 / Math.PI);
-        aim = Math.Max(-10, Math.Min(80, aim)) + (float)recoil * 5;
+        float f = H * 0.9f;   // focal length: how strong the perspective is
+        double x0 = (pistol ? 250 : 300) + sway * 2, y0 = (pistol ? 185 : 215) + Math.Sin(t * 1.6) * 3 + recoil * 8, z0 = 680 - recoil * 45;
+        // Barrel direction: mostly straight ahead, angled a little toward the middle, nudged slightly toward the
+        // crosshair (never outward, or the gun would turn edge-on) and kicked up by recoil.
+        double dx = Math.Min(0.06, (cx - W / 2) / f * 0.15) - 0.05, dy = (cy - H / 2) / f * 0.12 - 0.03 - recoil * 0.07, dz = 1;
+        double dl = Math.Sqrt(dx * dx + dy * dy + dz * dz); dx /= dl; dy /= dl; dz /= dl;
+        // "Down" on the gun: straight down, made perpendicular to the barrel.
+        double ux = -dy * dx, uy = 1 - dy * dy, uz = -dy * dz, ul = Math.Sqrt(ux * ux + uy * uy + uz * uz); ux /= ul; uy /= ul; uz /= ul;
+        Func<double, double, PointF> proj = (lx, ly) =>
+        {
+            double X = x0 - lx * dx + ly * ux, Y = y0 - lx * dy + ly * uy, Z = z0 - lx * dz + ly * uz;
+            return new PointF(W / 2 + (float)(f * X / Z), H / 2 + (float)(f * Y / Z));
+        };
+
         if (tracerT > 0)
         {
-            double a = aim * Math.PI / 180;
-            float len = (pistol ? -350 : gunId == "kestrel" ? -575 : -545) * k;
-            float mx = px + len * (float)Math.Cos(a), my = py + len * (float)Math.Sin(a);
-            using (var pen = new Pen(Color.FromArgb((int)(220 * tracerT / 0.07), 255, 228, 150), Math.Max(2, 4 * k)))
-                g.DrawLine(pen, mx, my, tracerX, tracerY);
+            var m = proj(pistol ? -385 : gunId == "kestrel" ? -600 : -570, -3);
+            using (var pen = new Pen(Color.FromArgb((int)(220 * tracerT / 0.07), 255, 228, 150), Math.Max(2, H / 300)))
+                g.DrawLine(pen, m.X, m.Y, tracerX, tracerY);
         }
-        DrawGunModel(g, px, py, k, aim, t, CurrentSkin, gunId, muzzleT > 0, true);
+
+        // Drawing happens in screen pixels, so carry over the current transform (screen shake).
+        var screen = g.Transform;
+        var area = new[] { proj(GunL, GunT), proj(GunR, GunT), proj(GunL, GunB), proj(GunR, GunB) };
+        screen.TransformPoints(area);
+        var st = g.Save();
+        g.ResetTransform();
+        gunWarp = area;
+        gunProjPt = p => { var a = new[] { proj(p.X, p.Y) }; screen.TransformPoints(a); return a[0]; };
+        try { DrawGunModel(g, 0, 0, 1, 0, t, CurrentSkin, gunId, muzzleT > 0, true); }
+        finally { gunWarp = null; gunProjPt = null; g.Restore(st); screen.Dispose(); }
     }
+
+    // ----- shape helpers: draw flat normally, or warped onto the 3D plane while gunWarp is set -----
+    void ToScreen(Graphics g, GraphicsPath p)
+    {
+        using (var m = g.Transform) p.Transform(m);
+        p.Warp(gunWarp, GunArea, null, WarpMode.Perspective, 0.2f);
+    }
+    void GFill(Graphics g, Brush b, GraphicsPath p)
+    {
+        using (p)
+        {
+            if (gunWarp == null) { g.FillPath(b, p); return; }
+            ToScreen(g, p);
+            var m = g.Transform; g.ResetTransform(); g.FillPath(b, p); g.Transform = m; m.Dispose();
+        }
+    }
+    void GStroke(Graphics g, Pen pen, GraphicsPath p)
+    {
+        if (gunWarp == null) { using (p) g.DrawPath(pen, p); return; }
+        p.Widen(pen);
+        using (var b = new SolidBrush(pen.Color)) GFill(g, b, p);
+    }
+    void GClip(Graphics g, GraphicsPath body)
+    {
+        using (var p = (GraphicsPath)body.Clone())
+        {
+            if (gunWarp == null) { g.SetClip(p, CombineMode.Intersect); return; }
+            ToScreen(g, p);
+            var m = g.Transform; g.ResetTransform(); g.SetClip(p, CombineMode.Intersect); g.Transform = m; m.Dispose();
+        }
+    }
+    // Gradient end points: brushes are used in screen space while warping.
+    PointF GPt(Graphics g, float x, float y)
+    {
+        if (gunWarp == null) return Pt(x, y);
+        var a = new[] { Pt(x, y) };
+        using (var m = g.Transform) m.TransformPoints(a);
+        return gunProjPt(a[0]);
+    }
+    static GraphicsPath PPoly(params PointF[] pts) { var p = new GraphicsPath(); p.AddPolygon(pts); return p; }
+    static GraphicsPath PRect(float l, float t, float r, float b) { var p = new GraphicsPath(); p.AddRectangle(RectangleF.FromLTRB(l, t, r, b)); return p; }
+    static GraphicsPath PEll(float x, float y, float w, float h) { var p = new GraphicsPath(); p.AddEllipse(x, y, w, h); return p; }
+    static GraphicsPath PLine(float x1, float y1, float x2, float y2) { var p = new GraphicsPath(); p.AddLine(x1, y1, x2, y2); return p; }
 
     static string GunName(string id) { return id == "kestrel" ? "Kestrel" : id == "sparrow" ? "Sparrow" : "Warden"; }
 
@@ -1721,24 +1787,24 @@ class Trainer : Form
         if (hands)
             using (var sleeve = new SolidBrush(Color.FromArgb(44, 48, 58)))
             {
-                g.FillPolygon(sleeve, new[] { Pt(-330, 40), Pt(-268, 36), Pt(-140, 340), Pt(-280, 340) });   // left forearm
-                g.FillPolygon(sleeve, new[] { Pt(40, 90), Pt(110, 70), Pt(320, 300), Pt(160, 340) });        // right forearm
+                GFill(g, sleeve, PPoly(Pt(-330, 40), Pt(-268, 36), Pt(-140, 340), Pt(-280, 340)));   // left forearm
+                GFill(g, sleeve, PPoly(Pt(40, 90), Pt(110, 70), Pt(320, 300), Pt(160, 340)));        // right forearm
             }
 
         using (var trim = new SolidBrush(Blend(s.Trim, Color.FromArgb(150, 156, 168), 0.22)))
         {
             // magazine and grip sit behind the body
-            g.FillPolygon(trim, kes ? new[] { Pt(-146, 38), Pt(-92, 38), Pt(-92, 152), Pt(-146, 152) }
-                                    : new[] { Pt(-152, 44), Pt(-96, 44), Pt(-74, 140), Pt(-136, 154) });
-            g.FillPolygon(trim, new[] { Pt(14, 38), Pt(58, 38), Pt(82, 126), Pt(34, 132) });
-            if (kes) FillRound(g, Blend(s.Trim, Color.FromArgb(150, 156, 168), 0.22), RectangleF.FromLTRB(-575, -24, -330, 22), 18);   // suppressor
+            GFill(g, trim, kes ? PPoly(Pt(-146, 38), Pt(-92, 38), Pt(-92, 152), Pt(-146, 152))
+                               : PPoly(Pt(-152, 44), Pt(-96, 44), Pt(-74, 140), Pt(-136, 154)));
+            GFill(g, trim, PPoly(Pt(14, 38), Pt(58, 38), Pt(82, 126), Pt(34, 132)));
+            if (kes) GFill(g, trim, Round(RectangleF.FromLTRB(-575, -24, -330, 22), 18));   // suppressor
             else
             {
-                g.FillRectangle(trim, RectangleF.FromLTRB(-505, -12, -380, 6));                // barrel
-                g.FillRectangle(trim, RectangleF.FromLTRB(-545, -19, -500, 13));               // muzzle brake
-                g.FillRectangle(trim, RectangleF.FromLTRB(-472, -38, -462, -12));              // front sight
+                GFill(g, trim, PRect(-505, -12, -380, 6));                // barrel
+                GFill(g, trim, PRect(-545, -19, -500, 13));               // muzzle brake
+                GFill(g, trim, PRect(-472, -38, -462, -12));              // front sight
             }
-            g.FillRectangle(trim, RectangleF.FromLTRB(-132, -64, 12, -42));                    // top rail
+            GFill(g, trim, PRect(-132, -64, 12, -42));                    // top rail
         }
 
         using (var body = new GraphicsPath { FillMode = FillMode.Winding })
@@ -1747,28 +1813,33 @@ class Trainer : Form
             body.AddPolygon(kes ? new[] { Pt(-214, -36), Pt(72, -40), Pt(82, 38), Pt(-204, 40) }
                                 : new[] { Pt(-204, -44), Pt(72, -44), Pt(84, 40), Pt(-192, 46) });                // receiver
             body.AddRectangle(kes ? RectangleF.FromLTRB(-334, -28, -204, 26) : RectangleF.FromLTRB(-388, -32, -196, 30)); // handguard
-            using (var b = new SolidBrush(s.Body)) g.FillPath(b, body);
-
-            var clip = g.Clip; g.SetClip(body, CombineMode.Intersect);
-            DrawSkinPattern(g, s, t);
-            using (var shade = new LinearGradientBrush(new PointF(0, -50), new PointF(0, 50), Color.FromArgb(50, 255, 255, 255), Color.FromArgb(80, 0, 0, 0)))
-                g.FillRectangle(shade, -600, -60, 900, 120);
-            g.Clip = clip;
-            using (var pen = new Pen(Blend(s.Trim, Color.Black, 0.3), 3)) g.DrawPath(pen, body);
+            BodyFinish(g, body, s, t, -50, 50, -600, 300);
         }
         // vents on the handguard
         using (var vent = new SolidBrush(Color.FromArgb(120, 0, 0, 0)))
-            for (int i = 0; i < 5; i++) g.FillRectangle(vent, (kes ? -320 : -370) + i * 30, -10, 16, 6);
+            for (int i = 0; i < 5; i++) { float vx = (kes ? -320 : -370) + i * 30; GFill(g, vent, PRect(vx, -10, vx + 16, -4)); }
 
         if (hands)
             using (var glove = new SolidBrush(Color.FromArgb(28, 30, 36)))
             {
-                g.FillEllipse(glove, -352, -4, 110, 62);   // left hand on the handguard
-                g.FillEllipse(glove, 10, 50, 86, 96);      // right hand on the grip
+                GFill(g, glove, PEll(-352, -4, 110, 62));   // left hand on the handguard
+                GFill(g, glove, PEll(10, 50, 86, 96));      // right hand on the grip
             }
 
         if (flash) DrawMuzzleFlash(g, muzzleX);
         g.Restore(st);
+    }
+
+    // Fills the gun body with its skin color and pattern, a top-to-bottom shine, and an outline.
+    void BodyFinish(Graphics g, GraphicsPath body, Skin s, double t, float shineTop, float shineBottom, float left, float right)
+    {
+        using (var b = new SolidBrush(s.Body)) GFill(g, b, (GraphicsPath)body.Clone());
+        var clip = g.Clip; GClip(g, body);
+        DrawSkinPattern(g, s, t);
+        using (var shade = new LinearGradientBrush(GPt(g, 0, shineTop), GPt(g, 0, shineBottom), Color.FromArgb(50, 255, 255, 255), Color.FromArgb(80, 0, 0, 0)))
+            GFill(g, shade, PRect(left, shineTop - 10, right, shineBottom + 10));
+        g.Clip = clip;
+        using (var pen = new Pen(Blend(s.Trim, Color.Black, 0.3), 3)) GStroke(g, pen, (GraphicsPath)body.Clone());
     }
 
     // The Sparrow pistol, drawn in the same coordinate space as the rifles.
@@ -1778,54 +1849,47 @@ class Trainer : Form
         var trimC = Blend(s.Trim, Color.FromArgb(150, 156, 168), 0.22);
         if (hands)
             using (var sleeve = new SolidBrush(Color.FromArgb(44, 48, 58)))
-                g.FillPolygon(sleeve, new[] { Pt(-10, 110), Pt(70, 96), Pt(270, 300), Pt(120, 320) });   // forearm
+                GFill(g, sleeve, PPoly(Pt(-10, 110), Pt(70, 96), Pt(270, 300), Pt(120, 320)));   // forearm
         using (var trim = new SolidBrush(trimC))
         {
-            g.FillPolygon(trim, new[] { Pt(-40, 14), Pt(14, 14), Pt(40, 124), Pt(-12, 132) });          // grip
-            using (var pen = new Pen(trimC, 8)) g.DrawArc(pen, -112, -2, 72, 52, 0, 180);              // trigger guard
-            g.FillRectangle(trim, RectangleF.FromLTRB(-86, 18, -78, 36));                              // trigger
-            g.FillRectangle(trim, RectangleF.FromLTRB(-300, -34, -288, -22));                          // barrel tip
-            g.FillRectangle(trim, RectangleF.FromLTRB(-284, -62, -274, -48));                          // front sight
-            g.FillRectangle(trim, RectangleF.FromLTRB(10, -62, 30, -50));                              // rear sight
+            GFill(g, trim, PPoly(Pt(-40, 14), Pt(14, 14), Pt(40, 124), Pt(-12, 132)));          // grip
+            var guard = new GraphicsPath(); guard.AddArc(-112, -2, 72, 52, 0, 180);
+            using (var pen = new Pen(trimC, 8)) GStroke(g, pen, guard);                          // trigger guard
+            GFill(g, trim, PRect(-86, 18, -78, 36));                                              // trigger
+            GFill(g, trim, PRect(-300, -34, -288, -22));                                          // barrel tip
+            GFill(g, trim, PRect(-284, -62, -274, -48));                                          // front sight
+            GFill(g, trim, PRect(10, -62, 30, -50));                                              // rear sight
         }
         using (var body = new GraphicsPath { FillMode = FillMode.Winding })
         {
             body.AddPolygon(new[] { Pt(-292, -50), Pt(34, -50), Pt(42, -10), Pt(-292, -10) });      // slide
             body.AddPolygon(new[] { Pt(-262, -10), Pt(24, -10), Pt(18, 18), Pt(-254, 18) });        // frame
-            using (var b = new SolidBrush(s.Body)) g.FillPath(b, body);
-            var clip = g.Clip; g.SetClip(body, CombineMode.Intersect);
-            DrawSkinPattern(g, s, t);
-            using (var shade = new LinearGradientBrush(new PointF(0, -54), new PointF(0, 22), Color.FromArgb(50, 255, 255, 255), Color.FromArgb(80, 0, 0, 0)))
-                g.FillRectangle(shade, -320, -60, 400, 90);
-            g.Clip = clip;
-            using (var pen = new Pen(Blend(s.Trim, Color.Black, 0.3), 3)) g.DrawPath(pen, body);
+            BodyFinish(g, body, s, t, -54, 22, -320, 80);
         }
         using (var dark = new SolidBrush(Color.FromArgb(120, 0, 0, 0)))
         {
-            for (int i = 0; i < 5; i++) g.FillRectangle(dark, -14 + i * 10, -44, 4, 28);   // slide serrations
-            g.FillRectangle(dark, -150, -46, 60, 8);                                       // ejection port
+            for (int i = 0; i < 5; i++) GFill(g, dark, PRect(-14 + i * 10, -44, -10 + i * 10, -16));   // slide serrations
+            GFill(g, dark, PRect(-150, -46, -90, -38));                                                 // ejection port
         }
         if (hands)
             using (var glove = new SolidBrush(Color.FromArgb(28, 30, 36)))
             {
-                g.FillEllipse(glove, -70, 36, 80, 68);     // support hand
-                g.FillEllipse(glove, -30, 36, 84, 92);     // shooting hand on the grip
+                GFill(g, glove, PEll(-70, 36, 80, 68));     // support hand
+                GFill(g, glove, PEll(-30, 36, 84, 92));     // shooting hand on the grip
             }
         if (flash) DrawMuzzleFlash(g, -292);
     }
 
     void DrawMuzzleFlash(Graphics g, float muzzleX)
     {
+        var star = new List<PointF>();
+        for (int i = 0; i < 12; i++)
         {
-            var star = new List<PointF>();
-            for (int i = 0; i < 12; i++)
-            {
-                double a = i * Math.PI / 6, r = i % 2 == 0 ? 70 : 26;
-                star.Add(Pt(muzzleX - 30 + (float)(Math.Cos(a) * r * 1.4), -3 + (float)(Math.Sin(a) * r)));
-            }
-            using (var b = new SolidBrush(Color.FromArgb(230, 255, 210, 110))) g.FillPolygon(b, star.ToArray());
-            using (var b = new SolidBrush(Color.FromArgb(240, 255, 255, 230))) g.FillEllipse(b, muzzleX - 52, -24, 44, 42);
+            double a = i * Math.PI / 6, r = i % 2 == 0 ? 70 : 26;
+            star.Add(Pt(muzzleX - 30 + (float)(Math.Cos(a) * r * 1.4), -3 + (float)(Math.Sin(a) * r)));
         }
+        using (var b = new SolidBrush(Color.FromArgb(230, 255, 210, 110))) GFill(g, b, PPoly(star.ToArray()));
+        using (var b = new SolidBrush(Color.FromArgb(240, 255, 255, 230))) GFill(g, b, PEll(muzzleX - 52, -24, 44, 42));
     }
 
     void DrawSkinPattern(Graphics g, Skin s, double t)
@@ -1836,19 +1900,19 @@ class Trainer : Form
                 {
                     int a = (int)(140 + 100 * Math.Sin(t * 4));
                     using (var pen = new Pen(Color.FromArgb(a, s.Glow), 4))
-                        foreach (int y in new[] { -22, 2, 24 }) g.DrawLine(pen, -400, y, 250, y - 6);
+                        foreach (int y in new[] { -22, 2, 24 }) GStroke(g, pen, PLine(-400, y, 250, y - 6));
                     break;
                 }
             case "arctic":
             case "crimson":
                 using (var pen = new Pen(Color.FromArgb(s.Id == "arctic" ? 110 : 170, s.Id == "arctic" ? s.Trim : s.Glow), 14))
-                    for (int x = -420; x < 300; x += 70) g.DrawLine(pen, x, -60, x + 60, 60);
+                    for (int x = -420; x < 300; x += 70) GStroke(g, pen, PLine(x, -60, x + 60, 60));
                 break;
             case "dragon":
                 {
                     float off = (float)(t * 140 % 200);
-                    using (var b = new LinearGradientBrush(new PointF(-400 + off, 0), new PointF(-300 + off, -40), Color.FromArgb(220, s.Glow), Color.FromArgb(0, 255, 40, 0)) { WrapMode = WrapMode.TileFlipXY })
-                        g.FillRectangle(b, -420, -60, 700, 120);
+                    using (var b = new LinearGradientBrush(GPt(g, -400 + off, 0), GPt(g, -300 + off, -40), Color.FromArgb(220, s.Glow), Color.FromArgb(0, 255, 40, 0)) { WrapMode = WrapMode.TileFlipXY })
+                        GFill(g, b, PRect(-420, -60, 280, 60));
                     break;
                 }
             case "glitch":
@@ -1856,14 +1920,17 @@ class Trainer : Form
                     var r = new Random((int)(t * 12));
                     for (int i = 0; i < 4; i++)
                         using (var b = new SolidBrush(Color.FromArgb(150, i % 2 == 0 ? s.Glow : Color.FromArgb(40, 230, 255))))
-                            g.FillRectangle(b, -420 + r.Next(500), -50 + r.Next(90), 60 + r.Next(160), 4 + r.Next(10));
+                        {
+                            float x = -420 + r.Next(500), y = -50 + r.Next(90);
+                            GFill(g, b, PRect(x, y, x + 60 + r.Next(160), y + 4 + r.Next(10)));
+                        }
                     break;
                 }
             case "gold":
                 {
                     float x = (float)(-700 + t * 450 % 1300);
                     using (var b = new SolidBrush(Color.FromArgb(120, 255, 255, 240)))
-                        g.FillPolygon(b, new[] { Pt(x, -60), Pt(x + 60, -60), Pt(x + 10, 60), Pt(x - 50, 60) });
+                        GFill(g, b, PPoly(Pt(x, -60), Pt(x + 60, -60), Pt(x + 10, 60), Pt(x - 50, 60)));
                     break;
                 }
             case "void":
@@ -1871,11 +1938,11 @@ class Trainer : Form
                 {
                     float x = -400 + (i * 97 % 640), y = -40 + (i * 53 % 80);
                     int a = (int)(140 + 110 * Math.Sin(t * 3 + i));
-                    using (var b = new SolidBrush(Color.FromArgb(Math.Max(0, a), i % 3 == 0 ? Color.White : s.Glow))) g.FillEllipse(b, x, y, 4, 4);
+                    using (var b = new SolidBrush(Color.FromArgb(Math.Max(0, a), i % 3 == 0 ? Color.White : s.Glow))) GFill(g, b, PEll(x, y, 4, 4));
                 }
                 break;
             default:
-                using (var pen = new Pen(Color.FromArgb(90, s.Trim), 3)) { g.DrawLine(pen, -180, -20, 40, -20); g.DrawLine(pen, -180, 20, 40, 20); }
+                using (var pen = new Pen(Color.FromArgb(90, s.Trim), 3)) { GStroke(g, pen, PLine(-180, -20, 40, -20)); GStroke(g, pen, PLine(-180, 20, 40, 20)); }
                 break;
         }
     }

@@ -711,18 +711,48 @@ function muzzleFlash(c, muzzleX) {
   c.closePath(); c.fillStyle = "rgba(255,210,110,.9)"; c.fill();
   c.fillStyle = "rgba(255,255,230,.95)"; c.beginPath(); c.ellipse(muzzleX - 30, -3, 22, 21, 0, 0, 7); c.fill();
 }
-// The gun pivots from the bottom-right and points at the crosshair, drifting toward it a little like an arm would.
-function drawAimedGun(k, now) {
-  const pistol = loadout.gun === "sparrow";
-  const px = W * .8 + (S.cx - W / 2) * .12 + (S.sway * 3 + S.recoil * 14) * k;
-  const py = H * (pistol ? .9 : .95) + (S.cy - H / 2) * .06 + (S.recoil * 26 + Math.sin(now * 1.6) * 3) * k;
-  const aim = clamp(Math.atan2(py - S.cy, px - S.cx) * 180 / Math.PI, -10, 80) + S.recoil * 5;
+// In rounds the gun is a first-person viewmodel: low on the right, pointing forward into the screen and angled slightly
+// toward the crosshair. It's drawn side-on into its own canvas, which a CSS 3D transform bends into perspective.
+const GUN_AREA = { l: -760, t: -130, r: 340, b: 380 };
+const gunLayer = $("gun-layer"), gctx = gunLayer.getContext("2d");
+let gunKey = "", gunAt = -1;
+function hideGun() { if (gunLayer.style.display !== "none") gunLayer.style.display = "none"; }
+// The perspective transform that maps the unit square onto 4 corners (top-left, top-right, bottom-right, bottom-left).
+function squareToQuad([x0, y0], [x1, y1], [x2, y2], [x3, y3]) {
+  const sx = x0 - x1 + x2 - x3, sy = y0 - y1 + y2 - y3;
+  const dx1 = x1 - x2, dx2 = x3 - x2, dy1 = y1 - y2, dy2 = y3 - y2, den = dx1 * dy2 - dx2 * dy1;
+  const g = (sx * dy2 - dx2 * sy) / den, h = (dx1 * sy - sx * dy1) / den;
+  return { a: x1 - x0 + g * x1, b: x3 - x0 + h * x3, c: x0, d: y1 - y0 + g * y1, e: y3 - y0 + h * y3, f: y0, g, h };
+}
+function drawAimedGun(now) {
+  const pistol = loadout.gun === "sparrow", f = H * .9, A = GUN_AREA;
+  const x0 = (pistol ? 250 : 300) + S.sway * 2, y0 = (pistol ? 185 : 215) + Math.sin(now * 1.6) * 3 + S.recoil * 8, z0 = 680 - S.recoil * 45;
+  // Barrel direction: mostly straight ahead, angled a little toward the middle, nudged slightly toward the
+  // crosshair (never outward, or the gun would turn edge-on) and kicked up by recoil.
+  let dx = Math.min(.06, (S.cx - W / 2) / f * .15) - .05, dy = (S.cy - H / 2) / f * .12 - .03 - S.recoil * .07, dz = 1;
+  const dl = Math.hypot(dx, dy, dz); dx /= dl; dy /= dl; dz /= dl;
+  // "Down" on the gun: straight down, made perpendicular to the barrel.
+  let ux = -dy * dx, uy = 1 - dy * dy, uz = -dy * dz; const ul = Math.hypot(ux, uy, uz); ux /= ul; uy /= ul; uz /= ul;
+  const proj = (lx, ly) => { const X = x0 - lx * dx + ly * ux, Y = y0 - lx * dy + ly * uy, Z = z0 - lx * dz + ly * uz; return [W / 2 + f * X / Z, H / 2 + f * Y / Z]; };
+
   if (S.tracer && S.tracer.t > 0) {
-    const a = aim * Math.PI / 180, len = (pistol ? -350 : loadout.gun === "kestrel" ? -575 : -545) * k;
-    ctx.strokeStyle = "rgba(255,228,150," + (S.tracer.t / .07 * .86) + ")"; ctx.lineWidth = Math.max(2, 4 * k);
-    ctx.beginPath(); ctx.moveTo(px + len * Math.cos(a), py + len * Math.sin(a)); ctx.lineTo(S.tracer.x, S.tracer.y); ctx.stroke();
+    const m = proj(pistol ? -385 : loadout.gun === "kestrel" ? -600 : -570, -3);
+    ctx.strokeStyle = "rgba(255,228,150," + (S.tracer.t / .07 * .86) + ")"; ctx.lineWidth = Math.max(2, H / 300);
+    ctx.beginPath(); ctx.moveTo(m[0], m[1]); ctx.lineTo(S.tracer.x, S.tracer.y); ctx.stroke();
   }
-  drawGunModel(ctx, px, py, k, aim, now, currentSkin(), loadout.gun, S.muzzle > 0, true);
+
+  // Side-on drawing, redrawn only when it changes: new gun/skin/flash, or 30 times a second for animated skins.
+  const w = A.r - A.l, h = A.b - A.t, bs = Math.min(2.5, Math.round(H / 1080 * 1.4 * Math.min(2, devicePixelRatio || 1) * 10) / 10);
+  if (gunLayer.width !== Math.round(w * bs)) { gunLayer.width = Math.round(w * bs); gunLayer.height = Math.round(h * bs); gunLayer.style.width = w + "px"; gunLayer.style.height = h + "px"; gunKey = ""; }
+  const skin = currentSkin(), key = loadout.gun + skin.id + (S.muzzle > 0) + bs, animated = !["standard", "arctic", "crimson"].includes(skin.id);
+  if (key !== gunKey || (animated && now - gunAt > 1 / 30)) {
+    gunKey = key; gunAt = now;
+    gctx.setTransform(1, 0, 0, 1, 0, 0); gctx.clearRect(0, 0, gunLayer.width, gunLayer.height);
+    drawGunModel(gctx, -A.l * bs, -A.t * bs, bs, 0, now, skin, loadout.gun, S.muzzle > 0, true);
+  }
+  const q = squareToQuad(proj(A.l, A.t), proj(A.r, A.t), proj(A.r, A.b), proj(A.l, A.b));
+  gunLayer.style.transform = "matrix3d(" + [q.a / w, q.d / w, 0, q.g / w, q.b / h, q.e / h, 0, q.h / h, 0, 0, 1, 0, q.c, q.f, 0, 1].join(",") + ")";
+  if (gunLayer.style.display !== "block") gunLayer.style.display = "block";
 }
 function skinPattern(c, s, t) {
   if (s.id === "neon") { c.strokeStyle = hexA(s.glow, (140 + 100 * Math.sin(t * 4)) / 255); c.lineWidth = 4; for (const y of [-22, 2, 24]) { c.beginPath(); c.moveTo(-400, y); c.lineTo(250, y - 6); c.stroke(); } }
@@ -745,7 +775,7 @@ function drawHealthBar(x, y, w, frac, draining) {
 function rr(x, y, w, h, r) { ctx.beginPath(); ctx.roundRect(x, y, w, h, r); }
 function draw(now) {
   const g = GAMES[gameId], gp = GP[gameId];
-  if (S.mode === RCT) return drawReaction();
+  if (S.mode === RCT) { hideGun(); return drawReaction(); }
   ctx.fillStyle = gp.bg; ctx.fillRect(0, 0, W, H);
   const glow = ctx.createRadialGradient(W / 2, H / 2, 0, W / 2, H / 2, Math.max(W, H) * .55);
   glow.addColorStop(0, hexA(g.color, .13)); glow.addColorStop(1, hexA(g.color, 0));
@@ -773,10 +803,8 @@ function draw(now) {
   for (const f of S.floats) { ctx.globalAlpha = Math.min(1, f.life / .4); ctx.fillStyle = f.color; ctx.fillText(f.text, f.x, f.y); }
   ctx.globalAlpha = 1;
   ctx.restore();
-  if ((S.mode === FLK || S.mode === BOT) && loadout.showGun && S.countdown <= 0) {
-    const k = H / 1080 * .85;
-    drawAimedGun(k, now);
-  }
+  if ((S.mode === FLK || S.mode === BOT) && loadout.showGun && S.countdown <= 0) drawAimedGun(now);
+  else hideGun();
   if (S.flash > 0) { ctx.fillStyle = "rgba(255,255,255," + (S.flash / .08 * .24) + ")"; ctx.fillRect(0, 0, W, H); }
 
   // HUD
