@@ -152,7 +152,7 @@ class Trainer : Form
 
     const string TRK = "Tracking", FLK = "Flick", BOT = "Bots", RCT = "Reaction", FND = "Sens finder", HTK = "Health Track";
     static readonly double[] DrainRate = { 110, 80, 65, 55 };   // health per second while your crosshair is on the ball
-    const string AppVersion = "1.6.0";
+    const string AppVersion = "1.6.1";
     const string Repo = "THATLMG/aim-trainer";
     static readonly string[] DiffNames = { "Easy", "Medium", "Hard", "Insane" };
     static readonly double[] BallR = { 0.045, 0.033, 0.024, 0.017 };
@@ -979,6 +979,7 @@ class Trainer : Form
             else if (scr == Scr.Game) GoHome();
             e.Handled = e.SuppressKeyPress = true;
         }
+        else if (e.KeyCode == Keys.G && !inBox && scr == Scr.Game && (mode == FLK || mode == BOT)) { showGun = !showGun; Save(); Invalidate(); e.Handled = e.SuppressKeyPress = true; }
         else if (e.KeyCode == Keys.Enter && inBox) { ActiveControl = null; e.Handled = e.SuppressKeyPress = true; }
         else if ((e.KeyCode == Keys.Space || e.KeyCode == Keys.Enter) && !inBox)
         {
@@ -1680,16 +1681,19 @@ class Trainer : Form
     void DrawGun(Graphics g, float W, float H, double t)
     {
         float k = H / 1080f * 0.85f;
-        float px = W * 0.80f + (float)(sway * 3 + recoil * 14) * k;
-        float py = H * 0.92f + (float)(recoil * 26 + Math.Sin(t * 1.6) * 3) * k;
+        float px = W * (gunId == "sparrow" ? 0.82f : 0.80f) + (float)(sway * 3 + recoil * 14) * k;
+        float py = H * (gunId == "sparrow" ? 0.86f : 0.92f) + (float)(recoil * 26 + Math.Sin(t * 1.6) * 3) * k;
         DrawGunModel(g, px, py, k, 12 + (float)recoil * 5, t, CurrentSkin, gunId, muzzleT > 0, true);
     }
 
-    // Draws one of the two original guns, pointing left, with the skin's colors and animated pattern.
+    static string GunName(string id) { return id == "kestrel" ? "Kestrel" : id == "sparrow" ? "Sparrow" : "Warden"; }
+
+    // Draws one of the three original guns, pointing left, with the skin's colors and animated pattern.
     void DrawGunModel(Graphics g, float px, float py, float k, float angle, double t, Skin s, string gun, bool flash, bool hands)
     {
         var st = g.Save();
         g.TranslateTransform(px, py); g.RotateTransform(angle); g.ScaleTransform(k, k);
+        if (gun == "sparrow") { DrawPistol(g, t, s, flash, hands); g.Restore(st); return; }
         bool kes = gun == "kestrel";
         float muzzleX = kes ? -570 : -540;
 
@@ -1742,7 +1746,55 @@ class Trainer : Form
                 g.FillEllipse(glove, 10, 50, 86, 96);      // right hand on the grip
             }
 
-        if (flash)
+        if (flash) DrawMuzzleFlash(g, muzzleX);
+        g.Restore(st);
+    }
+
+    // The Sparrow pistol, drawn in the same coordinate space as the rifles.
+    void DrawPistol(Graphics g, double t, Skin s, bool flash, bool hands)
+    {
+        g.ScaleTransform(1.2f, 1.2f);
+        var trimC = Blend(s.Trim, Color.FromArgb(150, 156, 168), 0.22);
+        if (hands)
+            using (var sleeve = new SolidBrush(Color.FromArgb(44, 48, 58)))
+                g.FillPolygon(sleeve, new[] { Pt(-10, 110), Pt(70, 96), Pt(270, 300), Pt(120, 320) });   // forearm
+        using (var trim = new SolidBrush(trimC))
+        {
+            g.FillPolygon(trim, new[] { Pt(-40, 14), Pt(14, 14), Pt(40, 124), Pt(-12, 132) });          // grip
+            using (var pen = new Pen(trimC, 8)) g.DrawArc(pen, -112, -2, 72, 52, 0, 180);              // trigger guard
+            g.FillRectangle(trim, RectangleF.FromLTRB(-86, 18, -78, 36));                              // trigger
+            g.FillRectangle(trim, RectangleF.FromLTRB(-300, -34, -288, -22));                          // barrel tip
+            g.FillRectangle(trim, RectangleF.FromLTRB(-284, -62, -274, -48));                          // front sight
+            g.FillRectangle(trim, RectangleF.FromLTRB(10, -62, 30, -50));                              // rear sight
+        }
+        using (var body = new GraphicsPath { FillMode = FillMode.Winding })
+        {
+            body.AddPolygon(new[] { Pt(-292, -50), Pt(34, -50), Pt(42, -10), Pt(-292, -10) });      // slide
+            body.AddPolygon(new[] { Pt(-262, -10), Pt(24, -10), Pt(18, 18), Pt(-254, 18) });        // frame
+            using (var b = new SolidBrush(s.Body)) g.FillPath(b, body);
+            var clip = g.Clip; g.SetClip(body, CombineMode.Intersect);
+            DrawSkinPattern(g, s, t);
+            using (var shade = new LinearGradientBrush(new PointF(0, -54), new PointF(0, 22), Color.FromArgb(50, 255, 255, 255), Color.FromArgb(80, 0, 0, 0)))
+                g.FillRectangle(shade, -320, -60, 400, 90);
+            g.Clip = clip;
+            using (var pen = new Pen(Blend(s.Trim, Color.Black, 0.3), 3)) g.DrawPath(pen, body);
+        }
+        using (var dark = new SolidBrush(Color.FromArgb(120, 0, 0, 0)))
+        {
+            for (int i = 0; i < 5; i++) g.FillRectangle(dark, -14 + i * 10, -44, 4, 28);   // slide serrations
+            g.FillRectangle(dark, -150, -46, 60, 8);                                       // ejection port
+        }
+        if (hands)
+            using (var glove = new SolidBrush(Color.FromArgb(28, 30, 36)))
+            {
+                g.FillEllipse(glove, -70, 36, 80, 68);     // support hand
+                g.FillEllipse(glove, -30, 36, 84, 92);     // shooting hand on the grip
+            }
+        if (flash) DrawMuzzleFlash(g, -292);
+    }
+
+    void DrawMuzzleFlash(Graphics g, float muzzleX)
+    {
         {
             var star = new List<PointF>();
             for (int i = 0; i < 12; i++)
@@ -1753,7 +1805,6 @@ class Trainer : Form
             using (var b = new SolidBrush(Color.FromArgb(230, 255, 210, 110))) g.FillPolygon(b, star.ToArray());
             using (var b = new SolidBrush(Color.FromArgb(240, 255, 255, 230))) g.FillEllipse(b, muzzleX - 52, -24, 44, 42);
         }
-        g.Restore(st);
     }
 
     void DrawSkinPattern(Graphics g, Skin s, double t)
@@ -1849,16 +1900,17 @@ class Trainer : Form
         DrawRound(g, Blend(Line, CurrentSkin.Glow, 0.4), pv, P(16), 1);
         float pk = pv.Height / 330f;
         DrawGunModel(g, pv.X + pv.Width * 0.5f + 158 * pk, pv.Y + pv.Height * 0.48f, pk,(float)Math.Sin(t * 0.8) * 2, t, CurrentSkin, gunId, (t % 2.2) < 0.06, false);
-        DrawT(g, CurrentSkin.Name.ToUpper() + "  ·  " + (gunId == "kestrel" ? "KESTREL" : "WARDEN"), fH3, CurrentSkin.Glow == Color.Empty ? TextC : Blend(CurrentSkin.Glow, Color.White, 0.3), pv.X + P(22), pv.Y + P(18));
+        DrawT(g, CurrentSkin.Name.ToUpper() + "  ·  " + GunName(gunId).ToUpper(), fH3, CurrentSkin.Glow == Color.Empty ? TextC : Blend(CurrentSkin.Glow, Color.White, 0.3), pv.X + P(22), pv.Y + P(18));
 
         // guns
         float y = pv.Bottom + P(24);
         DrawT(g, "GUN", fLabel, Muted, m, y);
         AddBtn(g, new RectangleF(m, y + P(22), P(200), P(42)), "Warden  ·  rifle", () => { gunId = "warden"; Save(); }, false, gunId == "warden");
         AddBtn(g, new RectangleF(m + P(212), y + P(22), P(220), P(42)), "Kestrel  ·  suppressed", () => { gunId = "kestrel"; Save(); }, false, gunId == "kestrel");
+        AddBtn(g, new RectangleF(m + P(444), y + P(22), P(190), P(42)), "Sparrow  ·  pistol", () => { gunId = "sparrow"; Save(); }, false, gunId == "sparrow");
 
         // options
-        float ox = m + P(470);
+        float ox = m + P(674);
         DrawT(g, "OPTIONS", fLabel, Muted, ox, y);
         AddBtn(g, new RectangleF(ox, y + P(22), P(200), P(42)), "Show gun: " + (showGun ? "On" : "Off"), () => { showGun = !showGun; Save(); }, false, showGun);
         AddBtn(g, new RectangleF(ox + P(212), y + P(22), P(170), P(42)), "Sounds: " + (soundOn ? "On" : "Off"), () => { soundOn = !soundOn; Save(); if (soundOn) Sound(2); }, false, soundOn);
@@ -2488,6 +2540,8 @@ class Trainer : Form
             y += P(24) + P(40) + P(26);
         }
         AddBtn(g, new RectangleF(x2, y, P(220), P(54)), "Start   (Space)", () => StartPlay(mode), true, false);
+        if (mode == FLK || mode == BOT)
+            AddBtn(g, new RectangleF(x2 + P(236), y, P(190), P(54)), "Gun: " + (showGun ? "On" : "Off") + "   (G)", () => { showGun = !showGun; Save(); }, false, showGun);
         y += P(54) + P(30);
 
         // progress

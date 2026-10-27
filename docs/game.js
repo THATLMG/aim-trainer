@@ -146,6 +146,7 @@ function renderGame() {
   const dd = $("diffs"); dd.textContent = "";
   DIFFS.forEach((name, i) => dd.append(el("button", { class: "chip", "aria-pressed": String(diff === i), style: "--c:" + g.color, onclick: () => { diff = i; renderGame(); } }, [el("span", { text: name })])));
   $("diff-wrap").hidden = !(mode === TRK || mode === HTK || mode === FLK || mode === BOT);
+  renderGunToggle();
   renderProgress();
 }
 function updateCm() {
@@ -219,6 +220,15 @@ function prepare(m) {
   size();
 }
 $("start").onclick = () => prepare(mode);
+function renderGunToggle() {
+  const b = $("gun-toggle");
+  b.hidden = !(mode === FLK || mode === BOT);
+  b.setAttribute("aria-pressed", String(!!loadout.showGun));
+  b.style.setProperty("--c", GAMES[gameId].color);
+  b.firstChild.textContent = "Gun: " + (loadout.showGun ? "On" : "Off") + " (G)";
+}
+function toggleGun() { loadout.showGun = !loadout.showGun; saveLoadout(); renderGunToggle(); }
+$("gun-toggle").onclick = toggleGun;
 
 $("stage-go").onclick = async () => {
   if (CAL) return beginCalibration();
@@ -329,7 +339,10 @@ document.addEventListener("keydown", e => {
     else if (e.code === "Space") { e.preventDefault(); calibrationKey(); }
     return;
   }
-  if (!S || !S.active) return;
+  if (!S || !S.active) {
+    if ((e.key === "g" || e.key === "G") && !$("v-game").hidden && !$("gun-toggle").hidden && !/INPUT|TEXTAREA/.test(document.activeElement.tagName)) toggleGun();
+    return;
+  }
   if (e.key === "Escape") abort();
   if (S.mode === RCT && (e.code === "Space" || e.key === "Enter")) { e.preventDefault(); reactionClick(performance.now() / 1000); }
 });
@@ -641,11 +654,15 @@ function hexMix(a, b, t) {
 }
 function hexA(h, a) { const p = [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16)); return "rgba(" + p.join(",") + "," + a + ")"; }
 
-// Draws one of the two original guns pointing left, with the skin's colors and animated pattern.
+const GUN_NAMES = { warden: "Warden", kestrel: "Kestrel", sparrow: "Sparrow" };
+const gunName = id => GUN_NAMES[id] || "Warden";
+
+// Draws one of the three original guns pointing left, with the skin's colors and animated pattern.
 function drawGunModel(c, px, py, k, angle, t, s, gun, flash, hands) {
   const kes = gun === "kestrel", muzzleX = kes ? -570 : -540, trim = hexMix(s.trim, "#969ca8", .22);
   const poly = (pts, fill) => { c.beginPath(); pts.forEach(([x, y], i) => i ? c.lineTo(x, y) : c.moveTo(x, y)); c.closePath(); if (fill) { c.fillStyle = fill; c.fill(); } };
   c.save(); c.translate(px, py); c.rotate(angle * Math.PI / 180); c.scale(k, k);
+  if (gun === "sparrow") { drawPistol(c, t, s, flash, hands, trim, poly); c.restore(); return; }
   if (hands) { poly([[-330, 40], [-268, 36], [-140, 340], [-280, 340]], "#2c303a"); poly([[40, 90], [110, 70], [320, 300], [160, 340]], "#2c303a"); }
   c.fillStyle = trim;
   poly(kes ? [[-146, 38], [-92, 38], [-92, 152], [-146, 152]] : [[-152, 44], [-96, 44], [-74, 140], [-136, 154]], trim);
@@ -665,13 +682,34 @@ function drawGunModel(c, px, py, k, angle, t, s, gun, flash, hands) {
   c.strokeStyle = hexMix(s.trim, "#000000", .3); c.lineWidth = 3; c.stroke(body);
   c.fillStyle = "rgba(0,0,0,.47)"; for (let i = 0; i < 5; i++) c.fillRect((kes ? -320 : -370) + i * 30, -10, 16, 6);
   if (hands) { c.fillStyle = "#1c1e24"; c.beginPath(); c.ellipse(-297, 27, 55, 31, 0, 0, 7); c.fill(); c.beginPath(); c.ellipse(53, 98, 43, 48, 0, 0, 7); c.fill(); }
-  if (flash) {
-    c.beginPath();
-    for (let i = 0; i < 12; i++) { const a = i * Math.PI / 6, r = i % 2 ? 26 : 70; c.lineTo(muzzleX - 30 + Math.cos(a) * r * 1.4, -3 + Math.sin(a) * r); }
-    c.closePath(); c.fillStyle = "rgba(255,210,110,.9)"; c.fill();
-    c.fillStyle = "rgba(255,255,230,.95)"; c.beginPath(); c.ellipse(muzzleX - 30, -3, 22, 21, 0, 0, 7); c.fill();
-  }
+  if (flash) muzzleFlash(c, muzzleX);
   c.restore();
+}
+// The Sparrow pistol, drawn in the same coordinate space as the rifles.
+function drawPistol(c, t, s, flash, hands, trim, poly) {
+  c.scale(1.2, 1.2);
+  if (hands) poly([[-10, 110], [70, 96], [270, 300], [120, 320]], "#2c303a");
+  poly([[-40, 14], [14, 14], [40, 124], [-12, 132]], trim);
+  c.strokeStyle = trim; c.lineWidth = 8; c.beginPath(); c.ellipse(-76, 24, 36, 26, 0, 0, Math.PI); c.stroke();
+  c.fillStyle = trim; c.fillRect(-86, 18, 8, 18); c.fillRect(-300, -34, 12, 12); c.fillRect(-284, -62, 10, 14); c.fillRect(10, -62, 20, 12);
+  const body = new Path2D();
+  const add = pts => { pts.forEach(([x, y], i) => i ? body.lineTo(x, y) : body.moveTo(x, y)); body.closePath(); };
+  add([[-292, -50], [34, -50], [42, -10], [-292, -10]]);
+  add([[-262, -10], [24, -10], [18, 18], [-254, 18]]);
+  c.fillStyle = s.body; c.fill(body, "nonzero");
+  c.save(); c.clip(body, "nonzero"); skinPattern(c, s, t);
+  const shade = c.createLinearGradient(0, -54, 0, 22); shade.addColorStop(0, "rgba(255,255,255,.2)"); shade.addColorStop(1, "rgba(0,0,0,.32)");
+  c.fillStyle = shade; c.fillRect(-320, -60, 400, 90); c.restore();
+  c.strokeStyle = hexMix(s.trim, "#000000", .3); c.lineWidth = 3; c.stroke(body);
+  c.fillStyle = "rgba(0,0,0,.47)"; for (let i = 0; i < 5; i++) c.fillRect(-14 + i * 10, -44, 4, 28); c.fillRect(-150, -46, 60, 8);
+  if (hands) { c.fillStyle = "#1c1e24"; c.beginPath(); c.ellipse(-30, 70, 40, 34, 0, 0, 7); c.fill(); c.beginPath(); c.ellipse(12, 82, 42, 46, 0, 0, 7); c.fill(); }
+  if (flash) muzzleFlash(c, -292);
+}
+function muzzleFlash(c, muzzleX) {
+  c.beginPath();
+  for (let i = 0; i < 12; i++) { const a = i * Math.PI / 6, r = i % 2 ? 26 : 70; c.lineTo(muzzleX - 30 + Math.cos(a) * r * 1.4, -3 + Math.sin(a) * r); }
+  c.closePath(); c.fillStyle = "rgba(255,210,110,.9)"; c.fill();
+  c.fillStyle = "rgba(255,255,230,.95)"; c.beginPath(); c.ellipse(muzzleX - 30, -3, 22, 21, 0, 0, 7); c.fill();
 }
 function skinPattern(c, s, t) {
   if (s.id === "neon") { c.strokeStyle = hexA(s.glow, (140 + 100 * Math.sin(t * 4)) / 255); c.lineWidth = 4; for (const y of [-22, 2, 24]) { c.beginPath(); c.moveTo(-400, y); c.lineTo(250, y - 6); c.stroke(); } }
@@ -724,7 +762,7 @@ function draw(now) {
   ctx.restore();
   if ((S.mode === FLK || S.mode === BOT) && loadout.showGun && S.countdown <= 0) {
     const k = H / 1080 * .85;
-    drawGunModel(ctx, W * .8 + (S.sway * 3 + S.recoil * 14) * k, H * .92 + (S.recoil * 26 + Math.sin(now * 1.6) * 3) * k, k, 12 + S.recoil * 5, now, currentSkin(), loadout.gun, S.muzzle > 0, true);
+    drawGunModel(ctx, W * (loadout.gun === "sparrow" ? .82 : .8) + (S.sway * 3 + S.recoil * 14) * k, H * (loadout.gun === "sparrow" ? .86 : .92) + (S.recoil * 26 + Math.sin(now * 1.6) * 3) * k, k, 12 + S.recoil * 5, now, currentSkin(), loadout.gun, S.muzzle > 0, true);
   }
   if (S.flash > 0) { ctx.fillStyle = "rgba(255,255,255," + (S.flash / .08 * .24) + ")"; ctx.fillRect(0, 0, W, H); }
 
@@ -1050,7 +1088,7 @@ if (TAURI) {
 // ---------- loadout ----------
 function renderLoadout() {
   const gp = $("gun-pick"); gp.textContent = "";
-  [["warden", "Warden · rifle"], ["kestrel", "Kestrel · suppressed"]].forEach(([id, label]) =>
+  [["warden", "Warden · rifle"], ["kestrel", "Kestrel · suppressed"], ["sparrow", "Sparrow · pistol"]].forEach(([id, label]) =>
     gp.append(el("button", { class: "chip", "aria-pressed": String(loadout.gun === id), onclick: () => { loadout.gun = id; saveLoadout(); renderLoadout(); } }, [el("span", { text: label })])));
   const op = $("fx-options"); op.textContent = "";
   [["showGun", "Show gun"], ["sound", "Sounds"], ["shake", "Screen shake"]].forEach(([k, label]) =>
@@ -1063,7 +1101,7 @@ function renderLoadout() {
     grid.append(el("button", { class: "skin", "aria-pressed": String(sel), disabled: open ? null : "", style: "--b:" + s.body + ";--g:" + s.glow, onclick: () => { loadout.skin = s.id; saveLoadout(); renderLoadout(); } },
       [el("i"), el("div", {}, [el("b", { text: s.name }), el("span", { text: open ? (sel ? "Equipped" : "Click to equip") : "Locked · " + s.need })])]));
   }
-  $("gun-label").textContent = currentSkin().name + " · " + (loadout.gun === "kestrel" ? "Kestrel" : "Warden");
+  $("gun-label").textContent = currentSkin().name + " · " + gunName(loadout.gun);
   $("gun-label").style.color = currentSkin().glow;
   previewLoop();
 }
