@@ -598,13 +598,13 @@ const addFloat = (x, y, text, color) => S.floats.push({ x, y, text, color, life:
 function addFeed(text, head) { S.feed.unshift({ text, head, life: 3 }); if (S.feed.length > 5) S.feed.pop(); }
 const shake = t => { if (loadout.shake) S.shake = Math.max(S.shake, t); };
 function addCombo() { S.combo++; S.comboPop = 1; S.bestCombo = Math.max(S.bestCombo, S.combo); }
-function fire() { S.recoil = Math.min(1.4, S.recoil + 1); S.muzzle = .05; }
+function fire() { S.recoil = Math.min(1.4, S.recoil + 1); S.muzzle = .05; S.tracer = { t: .07, x: S.cx, y: S.cy }; }
 function stepFx(dt, mdx) {
   S.fx = S.fx.filter(p => { p.life -= dt; p.vy += 900 * dt; p.x += p.vx * dt; p.y += p.vy * dt; return p.life > 0; });
   S.floats = S.floats.filter(f => { f.life -= dt; f.y -= 60 * dt; return f.life > 0; });
   S.feed = S.feed.filter(f => (f.life -= dt) > 0);
   S.comboPop = Math.max(0, S.comboPop - dt * 4); S.shake = Math.max(0, S.shake - dt); S.flash = Math.max(0, S.flash - dt);
-  S.recoil *= Math.pow(.0005, dt); S.muzzle = Math.max(0, S.muzzle - dt);
+  S.recoil *= Math.pow(.0005, dt); S.muzzle = Math.max(0, S.muzzle - dt); if (S.tracer) S.tracer.t -= dt;
   S.sway += (clamp(mdx, -40, 40) * .15 - S.sway) * Math.min(1, dt * 10);
 }
 let actx = null;
@@ -711,6 +711,19 @@ function muzzleFlash(c, muzzleX) {
   c.closePath(); c.fillStyle = "rgba(255,210,110,.9)"; c.fill();
   c.fillStyle = "rgba(255,255,230,.95)"; c.beginPath(); c.ellipse(muzzleX - 30, -3, 22, 21, 0, 0, 7); c.fill();
 }
+// The gun pivots from the bottom-right and points at the crosshair, drifting toward it a little like an arm would.
+function drawAimedGun(k, now) {
+  const pistol = loadout.gun === "sparrow";
+  const px = W * .8 + (S.cx - W / 2) * .12 + (S.sway * 3 + S.recoil * 14) * k;
+  const py = H * (pistol ? .9 : .95) + (S.cy - H / 2) * .06 + (S.recoil * 26 + Math.sin(now * 1.6) * 3) * k;
+  const aim = clamp(Math.atan2(py - S.cy, px - S.cx) * 180 / Math.PI, -10, 80) + S.recoil * 5;
+  if (S.tracer && S.tracer.t > 0) {
+    const a = aim * Math.PI / 180, len = (pistol ? -350 : loadout.gun === "kestrel" ? -575 : -545) * k;
+    ctx.strokeStyle = "rgba(255,228,150," + (S.tracer.t / .07 * .86) + ")"; ctx.lineWidth = Math.max(2, 4 * k);
+    ctx.beginPath(); ctx.moveTo(px + len * Math.cos(a), py + len * Math.sin(a)); ctx.lineTo(S.tracer.x, S.tracer.y); ctx.stroke();
+  }
+  drawGunModel(ctx, px, py, k, aim, now, currentSkin(), loadout.gun, S.muzzle > 0, true);
+}
 function skinPattern(c, s, t) {
   if (s.id === "neon") { c.strokeStyle = hexA(s.glow, (140 + 100 * Math.sin(t * 4)) / 255); c.lineWidth = 4; for (const y of [-22, 2, 24]) { c.beginPath(); c.moveTo(-400, y); c.lineTo(250, y - 6); c.stroke(); } }
   else if (s.id === "arctic" || s.id === "crimson") { c.strokeStyle = s.id === "arctic" ? hexA(s.trim, .43) : hexA(s.glow, .67); c.lineWidth = 14; for (let x = -420; x < 300; x += 70) { c.beginPath(); c.moveTo(x, -60); c.lineTo(x + 60, 60); c.stroke(); } }
@@ -762,7 +775,7 @@ function draw(now) {
   ctx.restore();
   if ((S.mode === FLK || S.mode === BOT) && loadout.showGun && S.countdown <= 0) {
     const k = H / 1080 * .85;
-    drawGunModel(ctx, W * (loadout.gun === "sparrow" ? .82 : .8) + (S.sway * 3 + S.recoil * 14) * k, H * (loadout.gun === "sparrow" ? .86 : .92) + (S.recoil * 26 + Math.sin(now * 1.6) * 3) * k, k, 12 + S.recoil * 5, now, currentSkin(), loadout.gun, S.muzzle > 0, true);
+    drawAimedGun(k, now);
   }
   if (S.flash > 0) { ctx.fillStyle = "rgba(255,255,255," + (S.flash / .08 * .24) + ")"; ctx.fillRect(0, 0, W, H); }
 
@@ -1071,15 +1084,16 @@ if (TAURI) {
   let sent = null;
   // Discord allows about 5 updates per 20 seconds, so check every 4 seconds and only send changes.
   setInterval(() => {
-    const p = presenceText(), key = JSON.stringify(p);
+    const p = presenceText(), key = JSON.stringify(p) + AT.discordInvite;
     if (key === sent) return;
     sent = key;
-    TAURI.core.invoke("set_presence", p).catch(() => { sent = null; });
+    TAURI.core.invoke("set_presence", Object.assign({ invite: AT.discordInvite || "" }, p)).catch(() => { sent = null; });
   }, 4000);
   (async () => {
     try {
       const mine = await TAURI.app.getVersion(), rs = await releases(), latest = rs[0] && rs[0].tag_name.replace(/^v/, "");
-      const newer = latest && latest.split(".").map(Number).reduce((c, n, i) => c !== 0 ? c : n - (+mine.split(".")[i] || 0), 0) > 0;
+      // Any release that isn't this exact version counts as an update, so version numbers can restart (1.0.0).
+      const newer = latest && latest !== mine;
       if (newer) $("update-banner").hidden = false, $("update-text").textContent = "Update available: v" + latest + " (you have v" + mine + ")";
     } catch {}
   })();

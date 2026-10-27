@@ -152,7 +152,7 @@ class Trainer : Form
 
     const string TRK = "Tracking", FLK = "Flick", BOT = "Bots", RCT = "Reaction", FND = "Sens finder", HTK = "Health Track";
     static readonly double[] DrainRate = { 110, 80, 65, 55 };   // health per second while your crosshair is on the ball
-    const string AppVersion = "1.6.1";
+    const string AppVersion = "1.6.2";
     const string Repo = "THATLMG/aim-trainer";
     static readonly string[] DiffNames = { "Easy", "Medium", "Hard", "Insane" };
     static readonly double[] BallR = { 0.045, 0.033, 0.024, 0.017 };
@@ -237,7 +237,8 @@ class Trainer : Form
     bool soundOn = true, shakeOn = true;
 
     // gun on screen (Flick and Bots)
-    double recoil, muzzleT, sway;
+    double recoil, muzzleT, sway, tracerT;
+    float tracerX, tracerY;
     string gunId = "warden", skinId = "standard";
     bool showGun = true;
     double bestRankEver = -1;   // highest rank index reached, for unlocking skins
@@ -285,6 +286,7 @@ class Trainer : Form
     // updates and news
     string updVersion = "", updNotes = "", updUrl = "", updState = "";
     string newsId = "", newsText = "", seenNews = "";
+    string discordInvite = "";   // set from news.json, so the invite can change without an app update
 
     // reaction: 0 intro, 1 red, 2 green, 3 showing a time, 4 false start
     int rState;
@@ -424,7 +426,9 @@ class Trainer : Form
             { "assets", assets },
             { "buttons", new object[] {
                 new Dictionary<string, object> { { "label", "Get LMG's Aim Trainer" }, { "url", SiteUrl } },
-                new Dictionary<string, object> { { "label", "Leaderboard" }, { "url", LeaderboardUrl } } } }
+                discordInvite != ""
+                    ? new Dictionary<string, object> { { "label", "Join the Discord" }, { "url", discordInvite } }
+                    : new Dictionary<string, object> { { "label", "Leaderboard" }, { "url", LeaderboardUrl } } } }
         };
         if (rpcState.Length >= 2) act["state"] = fit(rpcState);
         return new JavaScriptSerializer().Serialize(act);
@@ -690,8 +694,8 @@ class Trainer : Form
             {
                 var rel = js.Deserialize<Dictionary<string, object>>(wc.DownloadString("https://api.github.com/repos/" + Repo + "/releases/latest"));
                 string tag = ((string)rel["tag_name"]).TrimStart('v', 'V');
-                Version remote;
-                if (Version.TryParse(tag, out remote) && remote > new Version(AppVersion))
+                // Any release that isn't this exact version counts as an update, so version numbers can restart (1.0.0) without stranding anyone.
+                if (tag != "" && tag != AppVersion)
                 {
                     string url = null;
                     foreach (var a in (System.Collections.IEnumerable)rel["assets"])
@@ -713,6 +717,9 @@ class Trainer : Form
             {
                 var n = js.Deserialize<Dictionary<string, object>>(wc.DownloadString("https://raw.githubusercontent.com/" + Repo + "/main/news.json"));
                 string id = n.ContainsKey("id") ? Convert.ToString(n["id"]) : "", text = n.ContainsKey("text") ? Convert.ToString(n["text"]) : "";
+                string invite = n.ContainsKey("discord") ? Convert.ToString(n["discord"]) : "";
+                if (invite.StartsWith("https://discord.gg/") || invite.StartsWith("https://discord.com/invite/"))
+                    BeginInvoke((MethodInvoker)delegate { discordInvite = invite; Invalidate(); });
                 if (id != "" && text != "")
                     BeginInvoke((MethodInvoker)delegate { if (id != seenNews) { newsId = id; newsText = text; Invalidate(); } });
             }
@@ -1259,6 +1266,7 @@ class Trainer : Form
         flashT = Math.Max(0, flashT - dt);
         recoil *= Math.Pow(0.0005, dt);                     // springs back in about a quarter second
         muzzleT = Math.Max(0, muzzleT - dt);
+        tracerT = Math.Max(0, tracerT - dt);
         sway += (Math.Max(-40, Math.Min(40, mouseDx)) * 0.15 - sway) * Math.Min(1, dt * 10);
     }
 
@@ -1514,6 +1522,7 @@ class Trainer : Form
     {
         recoil = Math.Min(1.4, recoil + 1);
         muzzleT = 0.05;
+        tracerT = 0.07; tracerX = cx; tracerY = cy;
     }
 
     void StartPath() { path.Clear(); pathStartX = cx; pathStartY = cy; pathFresh = true; }
@@ -1681,9 +1690,21 @@ class Trainer : Form
     void DrawGun(Graphics g, float W, float H, double t)
     {
         float k = H / 1080f * 0.85f;
-        float px = W * (gunId == "sparrow" ? 0.82f : 0.80f) + (float)(sway * 3 + recoil * 14) * k;
-        float py = H * (gunId == "sparrow" ? 0.86f : 0.92f) + (float)(recoil * 26 + Math.Sin(t * 1.6) * 3) * k;
-        DrawGunModel(g, px, py, k, 12 + (float)recoil * 5, t, CurrentSkin, gunId, muzzleT > 0, true);
+        bool pistol = gunId == "sparrow";
+        // The gun pivots from the bottom-right and points at the crosshair, drifting toward it a little like an arm would.
+        float px = W * 0.80f + (cx - W / 2) * 0.12f + (float)(sway * 3 + recoil * 14) * k;
+        float py = H * (pistol ? 0.90f : 0.95f) + (cy - H / 2) * 0.06f + (float)(recoil * 26 + Math.Sin(t * 1.6) * 3) * k;
+        float aim = (float)(Math.Atan2(py - cy, px - cx) * 180 / Math.PI);
+        aim = Math.Max(-10, Math.Min(80, aim)) + (float)recoil * 5;
+        if (tracerT > 0)
+        {
+            double a = aim * Math.PI / 180;
+            float len = (pistol ? -350 : gunId == "kestrel" ? -575 : -545) * k;
+            float mx = px + len * (float)Math.Cos(a), my = py + len * (float)Math.Sin(a);
+            using (var pen = new Pen(Color.FromArgb((int)(220 * tracerT / 0.07), 255, 228, 150), Math.Max(2, 4 * k)))
+                g.DrawLine(pen, mx, my, tracerX, tracerY);
+        }
+        DrawGunModel(g, px, py, k, aim, t, CurrentSkin, gunId, muzzleT > 0, true);
     }
 
     static string GunName(string id) { return id == "kestrel" ? "Kestrel" : id == "sparrow" ? "Sparrow" : "Warden"; }
@@ -2410,6 +2431,8 @@ class Trainer : Form
         AddBtn(g, new RectangleF(W - m - P(100), m, P(100), P(40)), "Exit", Close, false, false);
         AddBtn(g, new RectangleF(W - m - P(270), m, P(160), P(40)), "Leaderboard", OpenLeaderboard, false, false);
         AddBtn(g, new RectangleF(W - m - P(420), m, P(140), P(40)), "Edit profile", GoSetup, false, false);
+        if (discordInvite != "")
+            AddBtn(g, new RectangleF(W - m - P(870), m, P(150), P(40)), "Join Discord", () => { try { Process.Start(discordInvite); } catch { } }, true, false);
         if (DiscordAppId != "")
             AddBtn(g, new RectangleF(W - m - P(700), m, P(130), P(40)), "Discord: " + (discordOn ? "On" : "Off"),
                 () => { discordOn = !discordOn; Save(); }, false, discordOn);

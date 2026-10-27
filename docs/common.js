@@ -102,6 +102,18 @@ function renderNotes(md) {
 
 // ---------- Supabase ----------
 const AT = { sb: null, session: null, profile: null, listeners: [] };
+
+// The Discord invite lives in news.json so it can change without an app update. When set, every page gets a Discord link.
+AT.discordInvite = "";
+fetch("https://raw.githubusercontent.com/" + REPO + "/main/news.json", { cache: "no-store" }).then(r => r.json()).then(n => {
+  const inv = String(n.discord || "");
+  if (!/^https:\/\/(discord\.gg|discord\.com\/invite)\//.test(inv)) return;
+  AT.discordInvite = inv;
+  document.querySelectorAll(".nav .links").forEach(l => {
+    const a = document.createElement("a"); a.href = inv; a.target = "_blank"; a.rel = "noopener"; a.textContent = "Discord";
+    l.insertBefore(a, l.lastElementChild);
+  });
+}).catch(() => {});
 const configured = () => !!(CFG.supabaseUrl && CFG.supabaseKey && window.supabase);
 
 async function initAuth() {

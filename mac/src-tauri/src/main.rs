@@ -14,7 +14,7 @@ static STARTED: OnceLock<i64> = OnceLock::new();
 struct Discord(Mutex<Option<DiscordIpcClient>>);
 
 #[tauri::command]
-fn set_presence(discord: tauri::State<Discord>, details: String, status: String, game: String) -> Result<(), String> {
+fn set_presence(discord: tauri::State<Discord>, details: String, status: String, game: String, invite: Option<String>) -> Result<(), String> {
     let mut slot = discord.0.lock().map_err(|e| e.to_string())?;
     if slot.is_none() {
         // Connect lazily; this fails quietly when Discord isn't running and the page tries again later.
@@ -36,7 +36,11 @@ fn set_presence(discord: tauri::State<Discord>, details: String, status: String,
         .timestamps(activity::Timestamps::new().start(*STARTED.get().unwrap_or(&0)))
         .buttons(vec![
             activity::Button::new("Get LMG's Aim Trainer", SITE),
-            activity::Button::new("Leaderboard", &leaderboard),
+            // Once the Discord server exists, its invite replaces the leaderboard button.
+            match invite.as_deref() {
+                Some(url) if url.starts_with("https://discord.") => activity::Button::new("Join the Discord", url),
+                _ => activity::Button::new("Leaderboard", &leaderboard),
+            },
         ]);
     if status.chars().count() >= 2 {
         act = act.state(&status);

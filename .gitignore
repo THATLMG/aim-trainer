@@ -10,6 +10,10 @@
 !docs/**
 !supabase/
 !supabase/*.sql
+!supabase/functions/
+!supabase/functions/**
+!discord/
+!discord/**
 !make-images.ps1
 !mac/
 !mac/**

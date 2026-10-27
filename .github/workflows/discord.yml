@@ -1,0 +1,32 @@
+# Talks to the Discord bot (supabase/functions/discord-bot).
+# - Every published release is posted to #updates; the release notes become the post.
+# - Run it by hand with "register" to install or refresh the bot's slash commands.
+# Needs the repo secret DISCORD_NOTIFY_SECRET (same value as NOTIFY_SECRET in Supabase).
+name: Discord bot
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      action:
+        description: What to do
+        type: choice
+        options: [register, release]
+        default: register
+      tag:
+        description: Release tag to post, for "release" (e.g. v1.0.0)
+        required: false
+jobs:
+  post:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Tell the bot
+        env:
+          SECRET: ${{ secrets.DISCORD_NOTIFY_SECRET }}
+          ACTION: ${{ github.event_name == 'release' && 'release' || inputs.action }}
+          TAG: ${{ github.event.release.tag_name || inputs.tag }}
+        run: |
+          if [ -z "$SECRET" ]; then echo "DISCORD_NOTIFY_SECRET isn't set yet, skipping."; exit 0; fi
+          curl -sS --fail-with-body -X POST "https://lzigsxqthaqzlanvygmm.supabase.co/functions/v1/discord-bot?event=$ACTION" \
+            -H "Content-Type: application/json" -H "x-notify-secret: $SECRET" \
+            -d "{\"tag\": \"$TAG\"}"
