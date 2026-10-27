@@ -79,8 +79,9 @@ Use the Discord app you already have for the Discord status (ID `156408422309312
 | `DISCORD_REVIEW_CHANNEL` | ID of `#run-reviews` |
 | `DISCORD_REVIEWER_ROLE` | ID of the **Reviewer** role |
 | `DISCORD_UPDATE_ROLE` | ID of the **Update pings** role (optional) |
+| `DISCORD_ANNOUNCE_CHANNEL` | ID of `#announcements` (your notices from the app get posted here) |
 
-4. **SQL Editor**: run `supabase/003_health_track.sql` if you haven't yet, then `supabase/004_discord_bot.sql`.
+4. **SQL Editor**: run `supabase/003_health_track.sql` if you haven't yet, then `supabase/004_discord_bot.sql` and `supabase/005_notices.sql`.
 5. Back in the Discord developer portal → **General Information → Interactions Endpoint URL**:
    `https://lzigsxqthaqzlanvygmm.supabase.co/functions/v1/discord-bot` → **Save**. Discord tests it right away; if it saves, the bot is talking.
 
@@ -109,3 +110,4 @@ website, in the Windows app, and on everyone's Discord status. No app update nee
   Reviewing on the website instead also closes the buttons.
 - Verified runs and new #1s are posted to `#leaderboard`.
 - Every release is posted to `#updates` with its notes and download buttons.
+- Notices you send from the app ("Send notice" on the home screen, only on your PC) are posted to `#announcements`.

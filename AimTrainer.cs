@@ -152,7 +152,7 @@ class Trainer : Form
 
     const string TRK = "Tracking", FLK = "Flick", BOT = "Bots", RCT = "Reaction", FND = "Sens finder", HTK = "Health Track";
     static readonly double[] DrainRate = { 110, 80, 65, 55 };   // health per second while your crosshair is on the ball
-    const string AppVersion = "1.6.5";
+    const string AppVersion = "1.6.6";
     const string Repo = "THATLMG/aim-trainer";
     static readonly string[] DiffNames = { "Easy", "Medium", "Hard", "Insane" };
     static readonly double[] BallR = { 0.045, 0.033, 0.024, 0.017 };
@@ -182,6 +182,14 @@ class Trainer : Form
     const string LeaderboardUrl = SiteUrl + "board.html";
     const string DiscordAppId = "1564084223093121065";   // the Discord application named "LMG's Aim Trainer"
     const string CodeSecret = "aimtrainer-board-v1-7Qp2xK";   // must match the leaderboard page
+    const string SupabaseUrl = "https://lzigsxqthaqzlanvygmm.supabase.co";
+    const string SupabaseKey = "sb_publishable_6vUOyKqJceEClfugBL2aWA_HjELExo0";   // public key, safe to ship (same as docs/config.js)
+
+    // Notices: short messages from the owner to every player. Only a PC with the owner key file can send them.
+    string ownerKey = "";
+    long noticeId, seenNotice;
+    string noticeText = "", noticeMsg = "";
+    bool noticeImportant;
 
     Dictionary<string, double[]> settings = new Dictionary<string, double[]>();
     List<Rec> recs = new List<Rec>();
@@ -328,6 +336,12 @@ class Trainer : Form
 
         AddGames();
         dataPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "AimTrainer", "data.txt");
+        try
+        {
+            string keyFile = Path.Combine(Path.GetDirectoryName(dataPath), "owner.key");
+            if (File.Exists(keyFile)) ownerKey = File.ReadAllText(keyFile).Trim();
+        }
+        catch { }
         LoadData();
 
         sensBox = MakeBox();
@@ -370,7 +384,7 @@ class Trainer : Form
         t.Start();
         // Keep checking every 5 minutes while the app stays open, but only in the menus, never during a round.
         var updTimer = new System.Windows.Forms.Timer { Interval = 5 * 60 * 1000 };
-        updTimer.Tick += delegate { if (scr != Scr.Play) new Thread(CheckUpdate) { IsBackground = true }.Start(); };
+        updTimer.Tick += delegate { if (scr != Scr.Play) new Thread(delegate() { CheckUpdate(); CheckNotices(); }) { IsBackground = true }.Start(); };
         updTimer.Start();
         var mt = new Thread(MusicLoop) { IsBackground = true };
         mt.Start();
@@ -693,6 +707,91 @@ class Trainer : Form
     {
         CheckUpdate();
         CheckNews();
+        CheckNotices();
+    }
+
+    // The newest notice from the last 24 hours, if this player hasn't closed it yet.
+    void CheckNotices()
+    {
+        try
+        {
+            using (var wc = Web())
+            {
+                wc.Headers["apikey"] = SupabaseKey;
+                string since = Uri.EscapeDataString(DateTime.UtcNow.AddHours(-24).ToString("yyyy-MM-ddTHH:mm:ssZ"));
+                var list = new JavaScriptSerializer().DeserializeObject(wc.DownloadString(SupabaseUrl + "/rest/v1/notices?select=id,text,important&order=id.desc&limit=1&created_at=gt." + since)) as object[];
+                if (list == null || list.Length == 0) return;
+                var n = (Dictionary<string, object>)list[0];
+                long id = Convert.ToInt64(n["id"]);
+                string text = Convert.ToString(n["text"]);
+                bool imp = n["important"] is bool && (bool)n["important"];
+                BeginInvoke((MethodInvoker)delegate { if (id > seenNotice && id != noticeId) { noticeId = id; noticeText = text; noticeImportant = imp; Invalidate(); } });
+            }
+        }
+        catch { }
+    }
+
+    void DismissNotice()
+    {
+        seenNotice = noticeId;
+        noticeText = "";
+        Save();
+    }
+
+    // Owner only: a small window to type a notice, then send it to the database.
+    void OpenNoticeComposer()
+    {
+        var f = new Form
+        {
+            Text = "Send a notice to every player", FormBorderStyle = FormBorderStyle.FixedDialog, StartPosition = FormStartPosition.CenterParent,
+            MinimizeBox = false, MaximizeBox = false, ShowInTaskbar = false, BackColor = Panel, ForeColor = TextC, Font = fBody,
+            ClientSize = new Size((int)P(560), (int)P(290))
+        };
+        var info = new Label { Text = "Everyone sees this at the top of their menus within 5 minutes. It never interrupts a round.", ForeColor = Muted, Font = fSmall, Bounds = new Rectangle((int)P(20), (int)P(16), (int)P(520), (int)P(22)) };
+        var box = new TextBox { Multiline = true, MaxLength = 300, BackColor = UiBg, ForeColor = TextC, BorderStyle = BorderStyle.FixedSingle, Bounds = new Rectangle((int)P(20), (int)P(44), (int)P(520), (int)P(130)) };
+        var count = new Label { Text = "0 / 300", ForeColor = Muted, Font = fSmall, TextAlign = ContentAlignment.TopRight, Bounds = new Rectangle((int)P(380), (int)P(178), (int)P(160), (int)P(22)) };
+        box.TextChanged += delegate { count.Text = box.Text.Length + " / 300"; };
+        var imp = new CheckBox { Text = "Important (highlighted in red)", ForeColor = TextC, Bounds = new Rectangle((int)P(20), (int)P(178), (int)P(340), (int)P(26)) };
+        var send = new Button { Text = "Send", DialogResult = DialogResult.OK, FlatStyle = FlatStyle.Flat, BackColor = Accent, ForeColor = OnColor(Accent), Bounds = new Rectangle((int)P(300), (int)P(226), (int)P(120), (int)P(42)) };
+        var cancel = new Button { Text = "Cancel", DialogResult = DialogResult.Cancel, FlatStyle = FlatStyle.Flat, BackColor = PanelHi, ForeColor = TextC, Bounds = new Rectangle((int)P(430), (int)P(226), (int)P(110), (int)P(42)) };
+        send.FlatAppearance.BorderSize = 0; cancel.FlatAppearance.BorderSize = 0;
+        f.Controls.AddRange(new Control[] { info, box, count, imp, send, cancel });
+        f.CancelButton = cancel;
+        using (f)
+        {
+            if (f.ShowDialog(this) != DialogResult.OK || box.Text.Trim() == "") return;
+            string text = box.Text.Trim().Replace("\r\n", " ").Replace("\n", " ");
+            bool important = imp.Checked;
+            noticeMsg = "Sending…"; Invalidate();
+            new Thread(delegate() { SendNotice(text, important); }) { IsBackground = true }.Start();
+        }
+    }
+
+    void SendNotice(string text, bool important)
+    {
+        string msg;
+        try
+        {
+            using (var wc = Web())
+            {
+                wc.Headers["apikey"] = SupabaseKey;
+                wc.Headers["Content-Type"] = "application/json";
+                var body = new JavaScriptSerializer().Serialize(new Dictionary<string, object> { { "p_key", ownerKey }, { "p_text", text }, { "p_important", important } });
+                wc.UploadString(SupabaseUrl + "/rest/v1/rpc/send_notice", "POST", body);
+            }
+            msg = "Sent! Everyone sees it within 5 minutes.";
+            CheckNotices();
+        }
+        catch (WebException ex)
+        {
+            string detail = "";
+            try { using (var r = new StreamReader(ex.Response.GetResponseStream())) detail = r.ReadToEnd(); } catch { }
+            msg = detail.Contains("send_notice") && detail.Contains("not find") ? "Couldn't send: run supabase/005_notices.sql in Supabase first."
+                : detail.Contains("Not allowed") ? "Couldn't send: this PC's owner key isn't accepted."
+                : "Couldn't send. Check your internet and try again.";
+        }
+        catch { msg = "Couldn't send. Check your internet and try again."; }
+        BeginInvoke((MethodInvoker)delegate { noticeMsg = msg; Invalidate(); });
     }
 
     void CheckUpdate()
@@ -819,6 +918,7 @@ class Trainer : Form
                 var p = line.Split('\t');
                 if (p[0] == "P" && p.Length >= 3) { playerName = CleanName(p[1]); globalDpi = double.Parse(p[2], ci); }
                 if (p[0] == "N" && p.Length >= 2) seenNews = p[1];
+                if (p[0] == "T" && p.Length >= 2) long.TryParse(p[1], out seenNotice);
                 if (p[0] == "M" && p.Length >= 2) musicOn = p[1] == "1";
                 if (p[0] == "M2" && p.Length >= 2) lyricsInRound = p[1] == "1";
                 if (p[0] == "D" && p.Length >= 2) discordOn = p[1] == "1";
@@ -841,6 +941,7 @@ class Trainer : Form
             var lines = new List<string>();
             if (playerName != "") lines.Add(string.Format(ci, "P\t{0}\t{1}", playerName, globalDpi));
             if (seenNews != "") lines.Add("N\t" + seenNews.Replace("\t", " "));
+            if (seenNotice > 0) lines.Add("T\t" + seenNotice);
             lines.Add("M\t" + (musicOn ? "1" : "0"));
             lines.Add("M2\t" + (lyricsInRound ? "1" : "0"));
             lines.Add("D\t" + (discordOn ? "1" : "0"));
@@ -2419,7 +2520,25 @@ class Trainer : Form
         else PaintResults(g);
         if (MusicVisible && scr == Scr.Play) PaintMusicInRound(g);
         else if (MusicVisible && scr != Scr.Setup) PaintMusicBar(g);
-        if (scr == Scr.Game || scr == Scr.Results || scr == Scr.Loadout) PaintUpdateToast(g);
+        if (scr == Scr.Game || scr == Scr.Results || scr == Scr.Loadout) { PaintUpdateToast(g); PaintNoticeToast(g); }
+    }
+
+    // The latest notice as a pill at the top of the other menu screens (under the update notice, if there is one).
+    void PaintNoticeToast(Graphics g)
+    {
+        if (noticeText == "") return;
+        float W = ClientSize.Width, h = P(46), y = P(14) + (updState == "available" || updState == "downloading" ? P(56) : 0);
+        Color c = noticeImportant ? Color.FromArgb(255, 70, 85) : Accent;
+        float w = Math.Min(W - P(40), Math.Max(P(360), g.MeasureString(noticeText, fBody).Width + P(110)));
+        w = Math.Min(w, P(900));
+        var r = new RectangleF(W / 2 - w / 2, y, w, h);
+        AddHit(r, () => { });
+        FillRound(g, Blend(Panel, c, 0.28), r, h / 2);
+        DrawRound(g, c, r, h / 2, 1);
+        using (var sf = new StringFormat(StringFormatFlags.NoWrap) { Trimming = StringTrimming.EllipsisCharacter, LineAlignment = StringAlignment.Center })
+        using (var b = new SolidBrush(TextC))
+            g.DrawString(noticeText, fBody, b, new RectangleF(r.X + P(22), r.Y, r.Width - P(90), r.Height), sf);
+        AddBtn(g, new RectangleF(r.Right - P(64), r.Y + P(6), P(52), h - P(12)), "×", DismissNotice, false, false);
     }
 
     // A small notice at the top of the other menu screens (the home screen has the full banner). Never shown mid-round.
@@ -2614,6 +2733,11 @@ class Trainer : Form
         float W = ClientSize.Width, H = ClientSize.Height, m = P(48);
         DrawMenuBg(g);
         DrawT(g, AppName.ToUpper(), fTitle, TextC, m, m);
+        if (ownerKey != "")
+        {
+            AddBtn(g, new RectangleF(m + P(400), m + P(6), P(150), P(36)), "Send notice", OpenNoticeComposer, false, false);
+            if (noticeMsg != "") DrawT(g, noticeMsg, fSmall, Muted, m + P(564), m + P(16));
+        }
         DrawT(g, "Playing as " + playerName + "  ·  " + globalDpi + " DPI.  Pick the game you want to practise for.", fBody, Muted, m + 2, m + P(56));
         AddBtn(g, new RectangleF(W - m - P(100), m, P(100), P(40)), "Exit", Close, false, false);
         AddBtn(g, new RectangleF(W - m - P(270), m, P(160), P(40)), "Leaderboard", OpenLeaderboard, false, false);
@@ -2645,6 +2769,18 @@ class Trainer : Form
             else if (updState == "error")
                 AddBtn(g, new RectangleF(r.Right - P(250), r.Y + P(10), P(230), P(38)), "Open download page", OpenReleases, false, false);
             bannerY += P(70);
+        }
+        if (noticeText != "")
+        {
+            Color c = noticeImportant ? Color.FromArgb(255, 70, 85) : Accent;
+            SizeF ts = g.MeasureString(noticeText, fBody, (int)(W - 2 * m - P(260)));
+            var r = new RectangleF(m, bannerY, W - 2 * m, Math.Max(P(58), ts.Height + P(30)));
+            FillRound(g, Blend(Panel, c, 0.18), r, P(10));
+            DrawRound(g, c, r, P(10), 1);
+            DrawT(g, noticeImportant ? "IMPORTANT" : "NOTICE", fLabel, c, r.X + P(20), r.Y + P(20));
+            DrawTW(g, noticeText, fBody, TextC, new RectangleF(r.X + P(120), r.Y + P(15), r.Width - P(260), r.Height - P(20)));
+            AddBtn(g, new RectangleF(r.Right - P(130), r.Y + P(10), P(110), P(38)), "Got it", DismissNotice, false, false);
+            bannerY += r.Height + P(12);
         }
         if (newsText != "")
         {

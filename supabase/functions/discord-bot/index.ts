@@ -2,14 +2,16 @@
 //
 // One URL handles three kinds of requests:
 //   1. Discord interactions (slash commands and buttons), signed by Discord.
-//   2. ?event=score  from the database trigger in supabase/004_discord_bot.sql when a run changes status.
+//   2. ?event=score  from the database trigger in supabase/004_discord_bot.sql when a run changes status,
+//      and ?event=notice from supabase/005_notices.sql when the owner sends a notice.
 //      Only the run id is sent; the bot re-reads the run itself, so a fake call can't post anything untrue.
 //   3. ?event=release or ?event=register  from GitHub Actions or you, with the NOTIFY_SECRET header.
 //
 // Secrets (Supabase: Edge Functions > Secrets). SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are provided automatically.
 //   DISCORD_BOT_TOKEN, DISCORD_PUBLIC_KEY, NOTIFY_SECRET,
 //   DISCORD_UPDATES_CHANNEL, DISCORD_LEADERBOARD_CHANNEL, DISCORD_REVIEW_CHANNEL,
-//   DISCORD_REVIEWER_ROLE, DISCORD_UPDATE_ROLE (optional ping on releases)
+//   DISCORD_REVIEWER_ROLE, DISCORD_UPDATE_ROLE (optional ping on releases),
+//   DISCORD_ANNOUNCE_CHANNEL (where owner notices are posted)
 
 const env = (k: string) => (globalThis as any).Deno?.env.get(k) ?? (globalThis as any).process?.env[k] ?? "";
 const APP_ID = env("DISCORD_APP_ID") || "1564084223093121065";
@@ -290,6 +292,19 @@ async function onScoreEvent(id: string) {
   return json({ ok: true });
 }
 
+// Called by the database when the owner sends a notice. Posts it once to #announcements.
+async function onNoticeEvent(id: string) {
+  if (!/^\d+$/.test(id) || !env("DISCORD_ANNOUNCE_CHANNEL")) return json({ ok: true });
+  // Claim it first, so two calls at once can't post it twice.
+  const claimed: any[] = await db("notices?id=eq." + id + "&discord_posted=eq.false", { method: "PATCH", body: JSON.stringify({ discord_posted: true }) });
+  if (!claimed.length) return json({ ok: true });
+  const n = claimed[0];
+  await discord("/channels/" + env("DISCORD_ANNOUNCE_CHANNEL") + "/messages", "POST", {
+    embeds: [{ title: n.important ? "❗ Important" : "📣 Notice", description: n.text, color: n.important ? RED : COLOR, timestamp: n.created_at }],
+    allowed_mentions: { parse: [] } });
+  return json({ ok: true });
+}
+
 // Called by GitHub Actions when a release is published. The release notes become the post.
 async function onRelease(tag: string) {
   const r = await fetch("https://api.github.com/repos/" + REPO + "/releases/tags/" + encodeURIComponent(tag), { headers: { "User-Agent": "lmg-aim-bot" } });
@@ -336,6 +351,7 @@ export async function handle(req: Request): Promise<Response> {
   const event = url.searchParams.get("event");
   try {
     if (event === "score") return await onScoreEvent(String(JSON.parse(body || "{}").id || ""));
+    if (event === "notice") return await onNoticeEvent(String(JSON.parse(body || "{}").id || ""));
     const secret = env("NOTIFY_SECRET");
     if (!secret || req.headers.get("x-notify-secret") !== secret) return new Response("Forbidden", { status: 403 });
     if (event === "release") return await onRelease(String(JSON.parse(body || "{}").tag || ""));

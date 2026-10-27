@@ -283,6 +283,11 @@ button.game.pick { text-align: left; cursor: pointer; color: var(--text); font: 
   padding: 8px 8px 8px 18px; border-radius: 999px; background: var(--panel, #161b24); border: 1px solid var(--accent, #3cc4b0);
   box-shadow: 0 8px 30px rgba(0, 0, 0, .45); max-width: calc(100vw - 32px); }
 .update-toast[hidden] { display: none; }
+.notice-toast { top: 72px; }
+.notice-toast b { text-transform: uppercase; font-size: 12px; letter-spacing: .08em; color: var(--accent, #3cc4b0); }
+.notice-toast.important { border-color: #ff4655; }
+.notice-toast.important b { color: #ff4655; }
+#update-toast[hidden] + .notice-toast { top: 14px; }
 #stage canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; cursor: none; }
 #stage canvas#gun-layer { inset: auto; left: 0; top: 0; transform-origin: 0 0; pointer-events: none; }
 #stage .overlay { position: absolute; inset: 0; display: grid; place-content: center; justify-items: center; gap: 14px; text-align: center; padding: 20px; background: rgba(7, 9, 13, .75); }

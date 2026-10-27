@@ -1206,7 +1206,27 @@ async function checkForUpdate() {
   $("update-toast").hidden = false;
 }
 checkForUpdate();
-setInterval(() => { if (stage.hidden) checkForUpdate(); }, 5 * 60 * 1000);
+
+// ---------- notices from the owner ----------
+// The newest notice from the last 24 hours, shown until the player closes it. Checked with the update check.
+async function checkNotices() {
+  try {
+    const since = new Date(Date.now() - 24 * 3600 * 1000).toISOString();
+    const r = await fetch(AT_CONFIG.supabaseUrl + "/rest/v1/notices?select=id,text,important&order=id.desc&limit=1&created_at=gt." + encodeURIComponent(since),
+      { headers: { apikey: AT_CONFIG.supabaseKey }, cache: "no-store" });
+    if (!r.ok) return;
+    const [n] = await r.json();
+    if (!n || n.id <= store.get("seenNotice", 0)) return;
+    const box = $("notice-toast");
+    $("notice-toast-label").textContent = n.important ? "Important" : "Notice";
+    $("notice-toast-text").textContent = n.text;
+    box.classList.toggle("important", !!n.important);
+    $("notice-toast-x").onclick = () => { store.set("seenNotice", n.id); box.hidden = true; };
+    box.hidden = false;
+  } catch {}
+}
+checkNotices();
+setInterval(() => { if (stage.hidden) { checkForUpdate(); checkNotices(); } }, 5 * 60 * 1000);
 
 // ---------- loadout ----------
 function renderLoadout() {
