@@ -663,46 +663,52 @@ function drawGunModel(c, px, py, k, angle, t, s, gun, flash, hands) {
   const poly = (pts, fill) => { c.beginPath(); pts.forEach(([x, y], i) => i ? c.lineTo(x, y) : c.moveTo(x, y)); c.closePath(); if (fill) { c.fillStyle = fill; c.fill(); } };
   c.save(); c.translate(px, py); c.rotate(angle * Math.PI / 180); c.scale(k, k);
   if (gun === "sparrow") { drawPistol(c, t, s, flash, hands, trim, poly); c.restore(); return; }
+  // c.solid = how thick the next part is (only the 3D wall pass uses it)
+  c.solid = 44;
   if (hands) { poly([[-330, 40], [-268, 36], [-140, 340], [-280, 340]], "#2c303a"); poly([[40, 90], [110, 70], [320, 300], [160, 340]], "#2c303a"); }
   c.fillStyle = trim;
-  poly(kes ? [[-146, 38], [-92, 38], [-92, 152], [-146, 152]] : [[-152, 44], [-96, 44], [-74, 140], [-136, 154]], trim);
-  poly([[14, 38], [58, 38], [82, 126], [34, 132]], trim);
-  if (kes) { c.beginPath(); c.roundRect(-575, -24, 245, 46, 18); c.fill(); }
-  else { c.fillRect(-505, -12, 125, 18); c.fillRect(-545, -19, 45, 32); c.fillRect(-472, -38, 10, 26); }
-  c.fillRect(-132, -64, 144, 22);
-  const body = new Path2D();
+  c.solid = 22; poly(kes ? [[-146, 38], [-92, 38], [-92, 152], [-146, 152]] : [[-152, 44], [-96, 44], [-74, 140], [-136, 154]], trim);
+  c.solid = 26; poly([[14, 38], [58, 38], [82, 126], [34, 132]], trim);
+  if (kes) { c.solid = 30; c.beginPath(); c.roundRect(-575, -24, 245, 46, 18); c.fill(); }
+  else { c.solid = 14; c.fillRect(-505, -12, 125, 18); c.solid = 22; c.fillRect(-545, -19, 45, 32); c.solid = 6; c.fillRect(-472, -38, 10, 26); }
+  c.solid = 26; c.fillRect(-132, -64, 144, 22);
+  const body = c.newPath ? c.newPath() : new Path2D();
   const add = pts => { pts.forEach(([x, y], i) => i ? body.lineTo(x, y) : body.moveTo(x, y)); body.closePath(); };
   add([[60, -34], [236, -48], [258, 46], [70, 34]]);
   add(kes ? [[-214, -36], [72, -40], [82, 38], [-204, 40]] : [[-204, -44], [72, -44], [84, 40], [-192, 46]]);
   if (kes) body.rect(-334, -28, 130, 54); else body.rect(-388, -32, 192, 62);
-  c.fillStyle = s.body; c.fill(body, "nonzero");
-  c.save(); c.clip(body, "nonzero"); skinPattern(c, s, t);
+  c.solid = 36; c.fillStyle = s.body; c.fill(body, "nonzero");
+  c.solid = 0; c.save(); c.clip(body, "nonzero"); skinPattern(c, s, t);
   const shade = c.createLinearGradient(0, -50, 0, 50); shade.addColorStop(0, "rgba(255,255,255,.2)"); shade.addColorStop(1, "rgba(0,0,0,.32)");
   c.fillStyle = shade; c.fillRect(-600, -60, 900, 120); c.restore();
   c.strokeStyle = hexMix(s.trim, "#000000", .3); c.lineWidth = 3; c.stroke(body);
   c.fillStyle = "rgba(0,0,0,.47)"; for (let i = 0; i < 5; i++) c.fillRect((kes ? -320 : -370) + i * 30, -10, 16, 6);
+  c.solid = 34;
   if (hands) { c.fillStyle = "#1c1e24"; c.beginPath(); c.ellipse(-297, 27, 55, 31, 0, 0, 7); c.fill(); c.beginPath(); c.ellipse(53, 98, 43, 48, 0, 0, 7); c.fill(); }
+  c.solid = 0;
   if (flash) muzzleFlash(c, muzzleX);
   c.restore();
 }
 // The Sparrow pistol, drawn in the same coordinate space as the rifles.
 function drawPistol(c, t, s, flash, hands, trim, poly) {
   c.scale(1.2, 1.2);
-  if (hands) poly([[-10, 110], [70, 96], [270, 300], [120, 320]], "#2c303a");
-  poly([[-40, 14], [14, 14], [40, 124], [-12, 132]], trim);
+  c.solid = 40; if (hands) poly([[-10, 110], [70, 96], [270, 300], [120, 320]], "#2c303a");
+  c.solid = 24; poly([[-40, 14], [14, 14], [40, 124], [-12, 132]], trim);
   c.strokeStyle = trim; c.lineWidth = 8; c.beginPath(); c.ellipse(-76, 24, 36, 26, 0, 0, Math.PI); c.stroke();
-  c.fillStyle = trim; c.fillRect(-86, 18, 8, 18); c.fillRect(-300, -34, 12, 12); c.fillRect(-284, -62, 10, 14); c.fillRect(10, -62, 20, 12);
-  const body = new Path2D();
+  c.fillStyle = trim; c.solid = 4; c.fillRect(-86, 18, 8, 18); c.solid = 12; c.fillRect(-300, -34, 12, 12); c.solid = 6; c.fillRect(-284, -62, 10, 14); c.solid = 10; c.fillRect(10, -62, 20, 12);
+  const body = c.newPath ? c.newPath() : new Path2D();
   const add = pts => { pts.forEach(([x, y], i) => i ? body.lineTo(x, y) : body.moveTo(x, y)); body.closePath(); };
   add([[-292, -50], [34, -50], [42, -10], [-292, -10]]);
   add([[-262, -10], [24, -10], [18, 18], [-254, 18]]);
-  c.fillStyle = s.body; c.fill(body, "nonzero");
-  c.save(); c.clip(body, "nonzero"); skinPattern(c, s, t);
+  c.solid = 26; c.fillStyle = s.body; c.fill(body, "nonzero");
+  c.solid = 0; c.save(); c.clip(body, "nonzero"); skinPattern(c, s, t);
   const shade = c.createLinearGradient(0, -54, 0, 22); shade.addColorStop(0, "rgba(255,255,255,.2)"); shade.addColorStop(1, "rgba(0,0,0,.32)");
   c.fillStyle = shade; c.fillRect(-320, -60, 400, 90); c.restore();
   c.strokeStyle = hexMix(s.trim, "#000000", .3); c.lineWidth = 3; c.stroke(body);
   c.fillStyle = "rgba(0,0,0,.47)"; for (let i = 0; i < 5; i++) c.fillRect(-14 + i * 10, -44, 4, 28); c.fillRect(-150, -46, 60, 8);
+  c.solid = 32;
   if (hands) { c.fillStyle = "#1c1e24"; c.beginPath(); c.ellipse(-30, 70, 40, 34, 0, 0, 7); c.fill(); c.beginPath(); c.ellipse(12, 82, 42, 46, 0, 0, 7); c.fill(); }
+  c.solid = 0;
   if (flash) muzzleFlash(c, -292);
 }
 function muzzleFlash(c, muzzleX) {
@@ -715,6 +721,8 @@ function muzzleFlash(c, muzzleX) {
 // toward the crosshair. It's drawn side-on into its own canvas, which a CSS 3D transform bends into perspective.
 const GUN_AREA = { l: -760, t: -130, r: 340, b: 380 };
 const gunLayer = $("gun-layer"), gctx = gunLayer.getContext("2d");
+// Set here as well as in style.css, so an old cached stylesheet can't misplace the gun.
+Object.assign(gunLayer.style, { position: "absolute", inset: "auto", left: "0", top: "0", transformOrigin: "0 0", pointerEvents: "none" });
 let gunKey = "", gunAt = -1;
 function hideGun() { if (gunLayer.style.display !== "none") gunLayer.style.display = "none"; }
 // The perspective transform that maps the unit square onto 4 corners (top-left, top-right, bottom-right, bottom-left).
@@ -723,6 +731,54 @@ function squareToQuad([x0, y0], [x1, y1], [x2, y2], [x3, y3]) {
   const dx1 = x1 - x2, dx2 = x3 - x2, dy1 = y1 - y2, dy2 = y3 - y2, den = dx1 * dy2 - dx2 * dy1;
   const g = (sx * dy2 - dx2 * sy) / den, h = (dx1 * sy - sx * dy1) / den;
   return { a: x1 - x0 + g * x1, b: x3 - x0 + h * x3, c: x0, d: y1 - y0 + g * y1, e: y3 - y0 + h * y3, f: y0, g, h };
+}
+// A stand-in canvas that records each solid part's outline (as polygons) instead of drawing it, for the 3D walls.
+function wallRecorder() {
+  let m = [1, 0, 0, 1, 0, 0]; const stack = [], parts = [];
+  const tp = (x, y) => [m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]];
+  const mul = (a, b, c2, d, e, f) => { m = [m[0] * a + m[2] * b, m[1] * a + m[3] * b, m[0] * c2 + m[2] * d, m[1] * c2 + m[3] * d, m[0] * e + m[2] * f + m[4], m[1] * e + m[3] * f + m[5]]; };
+  const newPath = () => ({ subs: [], cur: null,
+    moveTo(x, y) { this.cur = [tp(x, y)]; this.subs.push(this.cur); },
+    lineTo(x, y) { if (!this.cur) this.moveTo(x, y); else this.cur.push(tp(x, y)); },
+    closePath() { this.cur = null; },
+    rect(x, y, w, h) { this.subs.push([tp(x, y), tp(x + w, y), tp(x + w, y + h), tp(x, y + h)]); this.cur = null; },
+    ellipse(x, y, rx, ry, rot, a0, a1) { const pts = []; for (let i = 0; i <= 20; i++) { const a = a0 + (Math.min(a1, a0 + Math.PI * 2) - a0) * i / 20; pts.push(tp(x + Math.cos(a) * rx, y + Math.sin(a) * ry)); } this.subs.push(pts); this.cur = null; },
+    roundRect(x, y, w, h, r) { const pts = []; for (const [cx, cy, a] of [[x + w - r, y + r, -Math.PI / 2], [x + w - r, y + h - r, 0], [x + r, y + h - r, Math.PI / 2], [x + r, y + r, Math.PI]]) for (let i = 0; i <= 4; i++) pts.push(tp(cx + Math.cos(a + i * Math.PI / 8) * r, cy + Math.sin(a + i * Math.PI / 8) * r)); this.subs.push(pts); this.cur = null; } });
+  let path = newPath();
+  const r = { solid: 0, fillStyle: "", strokeStyle: "", lineWidth: 1, parts, newPath,
+    save() { stack.push(m); }, restore() { m = stack.pop() || [1, 0, 0, 1, 0, 0]; },
+    translate(x, y) { mul(1, 0, 0, 1, x, y); }, rotate(a) { mul(Math.cos(a), Math.sin(a), -Math.sin(a), Math.cos(a), 0, 0); }, scale(x, y) { mul(x, 0, 0, y, 0, 0); },
+    beginPath() { path = newPath(); }, moveTo(x, y) { path.moveTo(x, y); }, lineTo(x, y) { path.lineTo(x, y); }, closePath() { path.closePath(); },
+    rect(x, y, w, h) { path.rect(x, y, w, h); }, ellipse(...a) { path.ellipse(...a); }, roundRect(...a) { path.roundRect(...a); },
+    fill(p) { if (this.solid > 0 && typeof this.fillStyle === "string") parts.push({ subs: (p && p.subs ? p : path).subs, depth: this.solid, color: this.fillStyle }); },
+    fillRect(x, y, w, h) { if (this.solid > 0 && typeof this.fillStyle === "string") parts.push({ subs: [[tp(x, y), tp(x + w, y), tp(x + w, y + h), tp(x, y + h)]], depth: this.solid, color: this.fillStyle }); },
+    stroke() {}, clip() {}, createLinearGradient() { return { addColorStop() {} }; } };
+  return r;
+}
+const rgbOf = c => c[0] === "#" ? [1, 3, 5].map(i => parseInt(c.slice(i, i + 2), 16)) : (c.match(/\d+(\.\d+)?/g) || [0, 0, 0]).slice(0, 3).map(Number);
+// Each part's edges are extruded into the gun; only walls facing the camera are drawn, farthest first, lit from above.
+function drawGunWalls(parts, P3, S3, D, U) {
+  const L = [.35, -.85, -.4];
+  for (const part of parts) {
+    const [cr, cg, cb] = rgbOf(part.color), walls = [], dep = part.depth;
+    for (const pts of part.subs) {
+      const n = pts.length; if (n < 3) continue;
+      const mx = pts.reduce((a, q) => a + q[0], 0) / n, my = pts.reduce((a, q) => a + q[1], 0) / n;
+      for (let j = 0; j < n; j++) {
+        const a = pts[j], b = pts[(j + 1) % n], ex = b[0] - a[0], ey = b[1] - a[1], len = Math.hypot(ex, ey);
+        if (len < .01) continue;
+        let nx = ey / len, ny = -ex / len; const cxm = (a[0] + b[0]) / 2, cym = (a[1] + b[1]) / 2;
+        if (nx * (cxm - mx) + ny * (cym - my) < 0) { nx = -nx; ny = -ny; }
+        const N = [-nx * D[0] + ny * U[0], -nx * D[1] + ny * U[1], -nx * D[2] + ny * U[2]], M = P3(cxm, cym, dep / 2);
+        if (N[0] * M[0] + N[1] * M[1] + N[2] * M[2] >= 0) continue;
+        const lit = .42 + .58 * Math.max(0, N[0] * L[0] + N[1] * L[1] + N[2] * L[2]);
+        walls.push({ d: M[0] * M[0] + M[1] * M[1] + M[2] * M[2], col: "rgb(" + [cr, cg, cb].map(v => Math.min(255, Math.round(v * lit + 6))).join(",") + ")",
+          q: [S3(P3(a[0], a[1], 0)), S3(P3(b[0], b[1], 0)), S3(P3(b[0], b[1], dep)), S3(P3(a[0], a[1], dep))] });
+      }
+    }
+    walls.sort((p, q) => q.d - p.d);
+    for (const w of walls) { ctx.fillStyle = w.col; ctx.beginPath(); w.q.forEach(([x, y], i) => i ? ctx.lineTo(x, y) : ctx.moveTo(x, y)); ctx.closePath(); ctx.fill(); }
+  }
 }
 function drawAimedGun(now) {
   const pistol = loadout.gun === "sparrow", f = H * .9, A = GUN_AREA;
@@ -734,6 +790,13 @@ function drawAimedGun(now) {
   // "Down" on the gun: straight down, made perpendicular to the barrel.
   let ux = -dy * dx, uy = 1 - dy * dy, uz = -dy * dz; const ul = Math.hypot(ux, uy, uz); ux /= ul; uy /= ul; uz /= ul;
   const proj = (lx, ly) => { const X = x0 - lx * dx + ly * ux, Y = y0 - lx * dy + ly * uy, Z = z0 - lx * dz + ly * uz; return [W / 2 + f * X / Z, H / 2 + f * Y / Z]; };
+  // "Into the gun" (away from the camera), for the 3D walls.
+  let sx = uy * dz - uz * dy, sy = uz * dx - ux * dz, sz = ux * dy - uy * dx; if (sx < 0) { sx = -sx; sy = -sy; sz = -sz; }
+  const P3 = (lx, ly, side) => [x0 - lx * dx + ly * ux + side * sx, y0 - lx * dy + ly * uy + side * sy, z0 - lx * dz + ly * uz + side * sz];
+  const S3 = v => [W / 2 + f * v[0] / v[2], H / 2 + f * v[1] / v[2]];
+  const rec = wallRecorder();
+  drawGunModel(rec, 0, 0, 1, 0, now, currentSkin(), loadout.gun, false, true);
+  drawGunWalls(rec.parts, P3, S3, [dx, dy, dz], [ux, uy, uz]);
 
   if (S.tracer && S.tracer.t > 0) {
     const m = proj(pistol ? -385 : loadout.gun === "kestrel" ? -600 : -570, -3);

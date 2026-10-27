@@ -152,7 +152,7 @@ class Trainer : Form
 
     const string TRK = "Tracking", FLK = "Flick", BOT = "Bots", RCT = "Reaction", FND = "Sens finder", HTK = "Health Track";
     static readonly double[] DrainRate = { 110, 80, 65, 55 };   // health per second while your crosshair is on the ball
-    const string AppVersion = "1.6.3";
+    const string AppVersion = "1.6.4";
     const string Repo = "THATLMG/aim-trainer";
     static readonly string[] DiffNames = { "Easy", "Medium", "Hard", "Insane" };
     static readonly double[] BallR = { 0.045, 0.033, 0.024, 0.017 };
@@ -1693,6 +1693,11 @@ class Trainer : Form
     static readonly RectangleF GunArea = RectangleF.FromLTRB(GunL, GunT, GunR, GunB);
     PointF[] gunWarp;                 // while set, gun shapes are warped onto these 4 screen corners of GunArea
     Func<PointF, PointF> gunProjPt;   // the same warp for single points (gradient brushes)
+    // The gun has real thickness: pass 1 draws each part's shaded side walls, pass 2 the flat faces on top.
+    int gunPass;                      // 0 = flat (Loadout preview), 1 = side walls only, 2 = faces only
+    Func<double, double, double, double[]> gun3D;      // model point + distance into the gun -> 3D point
+    Func<double[], PointF> gunScreen3;                 // 3D point -> screen
+    double[] gunDir, gunDown;                          // the barrel and "down" directions in 3D
 
     void DrawGun(Graphics g, float W, float H, double t)
     {
@@ -1705,6 +1710,9 @@ class Trainer : Form
         double dl = Math.Sqrt(dx * dx + dy * dy + dz * dz); dx /= dl; dy /= dl; dz /= dl;
         // "Down" on the gun: straight down, made perpendicular to the barrel.
         double ux = -dy * dx, uy = 1 - dy * dy, uz = -dy * dz, ul = Math.Sqrt(ux * ux + uy * uy + uz * uz); ux /= ul; uy /= ul; uz /= ul;
+        // "Into the gun" (away from the camera): perpendicular to both.
+        double sx = uy * dz - uz * dy, sy = uz * dx - ux * dz, sz = ux * dy - uy * dx;
+        if (sx < 0) { sx = -sx; sy = -sy; sz = -sz; }
         Func<double, double, PointF> proj = (lx, ly) =>
         {
             double X = x0 - lx * dx + ly * ux, Y = y0 - lx * dy + ly * uy, Z = z0 - lx * dz + ly * uz;
@@ -1726,8 +1734,15 @@ class Trainer : Form
         g.ResetTransform();
         gunWarp = area;
         gunProjPt = p => { var a = new[] { proj(p.X, p.Y) }; screen.TransformPoints(a); return a[0]; };
-        try { DrawGunModel(g, 0, 0, 1, 0, t, CurrentSkin, gunId, muzzleT > 0, true); }
-        finally { gunWarp = null; gunProjPt = null; g.Restore(st); screen.Dispose(); }
+        gun3D = (lx, ly, side) => new[] { x0 - lx * dx + ly * ux + side * sx, y0 - lx * dy + ly * uy + side * sy, z0 - lx * dz + ly * uz + side * sz };
+        gunScreen3 = v => { var a = new[] { new PointF(W / 2 + (float)(f * v[0] / v[2]), H / 2 + (float)(f * v[1] / v[2])) }; screen.TransformPoints(a); return a[0]; };
+        gunDir = new[] { dx, dy, dz }; gunDown = new[] { ux, uy, uz };
+        try
+        {
+            gunPass = 1; DrawGunModel(g, 0, 0, 1, 0, t, CurrentSkin, gunId, muzzleT > 0, true);
+            gunPass = 2; DrawGunModel(g, 0, 0, 1, 0, t, CurrentSkin, gunId, muzzleT > 0, true);
+        }
+        finally { gunPass = 0; gunWarp = null; gunProjPt = null; g.Restore(st); screen.Dispose(); }
     }
 
     // ----- shape helpers: draw flat normally, or warped onto the 3D plane while gunWarp is set -----
@@ -1736,10 +1751,12 @@ class Trainer : Form
         using (var m = g.Transform) p.Transform(m);
         p.Warp(gunWarp, GunArea, null, WarpMode.Perspective, 0.2f);
     }
-    void GFill(Graphics g, Brush b, GraphicsPath p)
+    // depth > 0 makes the shape a solid that thick (in pass 1 its side walls are drawn).
+    void GFill(Graphics g, Brush b, GraphicsPath p, float depth = 0)
     {
         using (p)
         {
+            if (gunPass == 1) { var sb = b as SolidBrush; if (depth > 0 && sb != null) DrawWalls(g, sb.Color, p, depth); return; }
             if (gunWarp == null) { g.FillPath(b, p); return; }
             ToScreen(g, p);
             var m = g.Transform; g.ResetTransform(); g.FillPath(b, p); g.Transform = m; m.Dispose();
@@ -1747,12 +1764,14 @@ class Trainer : Form
     }
     void GStroke(Graphics g, Pen pen, GraphicsPath p)
     {
+        if (gunPass == 1) { p.Dispose(); return; }
         if (gunWarp == null) { using (p) g.DrawPath(pen, p); return; }
         p.Widen(pen);
         using (var b = new SolidBrush(pen.Color)) GFill(g, b, p);
     }
     void GClip(Graphics g, GraphicsPath body)
     {
+        if (gunPass == 1) return;
         using (var p = (GraphicsPath)body.Clone())
         {
             if (gunWarp == null) { g.SetClip(p, CombineMode.Intersect); return; }
@@ -1760,6 +1779,49 @@ class Trainer : Form
             var m = g.Transform; g.ResetTransform(); g.SetClip(p, CombineMode.Intersect); g.Transform = m; m.Dispose();
         }
     }
+    // The side walls of a solid: each edge of the shape is extruded into the gun. Only walls facing the camera are drawn,
+    // farthest first, lit from above so top surfaces are bright and undersides dark.
+    void DrawWalls(Graphics g, Color c, GraphicsPath p, float depth)
+    {
+        using (var m = g.Transform) p.Transform(m);
+        p.Flatten(null, 1f);
+        var pts = p.PathPoints; var types = p.PathTypes;
+        var walls = new List<KeyValuePair<double, KeyValuePair<PointF[], Color>>>();
+        double[] D = gunDir, U = gunDown, L = { 0.35, -0.85, -0.4 };
+        for (int s0 = 0, i = 1; i <= pts.Length; i++)
+        {
+            if (i < pts.Length && (types[i] & 7) != 0) continue;   // still inside this figure
+            int n = i - s0;
+            if (n >= 3)
+            {
+                float mx = 0, my = 0;
+                for (int j = s0; j < i; j++) { mx += pts[j].X; my += pts[j].Y; }
+                mx /= n; my /= n;
+                for (int j = 0; j < n; j++)
+                {
+                    PointF a = pts[s0 + j], b = pts[s0 + (j + 1) % n];
+                    double ex = b.X - a.X, ey = b.Y - a.Y, len = Math.Sqrt(ex * ex + ey * ey);
+                    if (len < 0.01) continue;
+                    double nx = ey / len, ny = -ex / len, cxm = (a.X + b.X) / 2, cym = (a.Y + b.Y) / 2;
+                    if (nx * (cxm - mx) + ny * (cym - my) < 0) { nx = -nx; ny = -ny; }   // point outward
+                    double[] N = { -nx * D[0] + ny * U[0], -nx * D[1] + ny * U[1], -nx * D[2] + ny * U[2] };
+                    var M = gun3D(cxm, cym, depth / 2);
+                    if (N[0] * M[0] + N[1] * M[1] + N[2] * M[2] >= 0) continue;          // faces away from the camera
+                    double lit = 0.42 + 0.58 * Math.Max(0, N[0] * L[0] + N[1] * L[1] + N[2] * L[2]);
+                    var col = Color.FromArgb(c.A, (int)Math.Min(255, c.R * lit + 6), (int)Math.Min(255, c.G * lit + 6), (int)Math.Min(255, c.B * lit + 6));
+                    var quad = new[] { gunScreen3(gun3D(a.X, a.Y, 0)), gunScreen3(gun3D(b.X, b.Y, 0)), gunScreen3(gun3D(b.X, b.Y, depth)), gunScreen3(gun3D(a.X, a.Y, depth)) };
+                    walls.Add(new KeyValuePair<double, KeyValuePair<PointF[], Color>>(M[0] * M[0] + M[1] * M[1] + M[2] * M[2], new KeyValuePair<PointF[], Color>(quad, col)));
+                }
+            }
+            s0 = i;
+        }
+        walls.Sort((x, y) => y.Key.CompareTo(x.Key));
+        var keep = g.Transform; g.ResetTransform();
+        foreach (var w in walls)
+            using (var br = new SolidBrush(w.Value.Value)) g.FillPolygon(br, w.Value.Key);
+        g.Transform = keep; keep.Dispose();
+    }
+
     // Gradient end points: brushes are used in screen space while warping.
     PointF GPt(Graphics g, float x, float y)
     {
@@ -1787,24 +1849,24 @@ class Trainer : Form
         if (hands)
             using (var sleeve = new SolidBrush(Color.FromArgb(44, 48, 58)))
             {
-                GFill(g, sleeve, PPoly(Pt(-330, 40), Pt(-268, 36), Pt(-140, 340), Pt(-280, 340)));   // left forearm
-                GFill(g, sleeve, PPoly(Pt(40, 90), Pt(110, 70), Pt(320, 300), Pt(160, 340)));        // right forearm
+                GFill(g, sleeve, PPoly(Pt(-330, 40), Pt(-268, 36), Pt(-140, 340), Pt(-280, 340)), 44);   // left forearm
+                GFill(g, sleeve, PPoly(Pt(40, 90), Pt(110, 70), Pt(320, 300), Pt(160, 340)), 44);        // right forearm
             }
 
         using (var trim = new SolidBrush(Blend(s.Trim, Color.FromArgb(150, 156, 168), 0.22)))
         {
             // magazine and grip sit behind the body
             GFill(g, trim, kes ? PPoly(Pt(-146, 38), Pt(-92, 38), Pt(-92, 152), Pt(-146, 152))
-                               : PPoly(Pt(-152, 44), Pt(-96, 44), Pt(-74, 140), Pt(-136, 154)));
-            GFill(g, trim, PPoly(Pt(14, 38), Pt(58, 38), Pt(82, 126), Pt(34, 132)));
-            if (kes) GFill(g, trim, Round(RectangleF.FromLTRB(-575, -24, -330, 22), 18));   // suppressor
+                               : PPoly(Pt(-152, 44), Pt(-96, 44), Pt(-74, 140), Pt(-136, 154)), 22);
+            GFill(g, trim, PPoly(Pt(14, 38), Pt(58, 38), Pt(82, 126), Pt(34, 132)), 26);
+            if (kes) GFill(g, trim, Round(RectangleF.FromLTRB(-575, -24, -330, 22), 18), 30);   // suppressor
             else
             {
-                GFill(g, trim, PRect(-505, -12, -380, 6));                // barrel
-                GFill(g, trim, PRect(-545, -19, -500, 13));               // muzzle brake
-                GFill(g, trim, PRect(-472, -38, -462, -12));              // front sight
+                GFill(g, trim, PRect(-505, -12, -380, 6), 14);                // barrel
+                GFill(g, trim, PRect(-545, -19, -500, 13), 22);               // muzzle brake
+                GFill(g, trim, PRect(-472, -38, -462, -12), 6);              // front sight
             }
-            GFill(g, trim, PRect(-132, -64, 12, -42));                    // top rail
+            GFill(g, trim, PRect(-132, -64, 12, -42), 26);                    // top rail
         }
 
         using (var body = new GraphicsPath { FillMode = FillMode.Winding })
@@ -1813,7 +1875,7 @@ class Trainer : Form
             body.AddPolygon(kes ? new[] { Pt(-214, -36), Pt(72, -40), Pt(82, 38), Pt(-204, 40) }
                                 : new[] { Pt(-204, -44), Pt(72, -44), Pt(84, 40), Pt(-192, 46) });                // receiver
             body.AddRectangle(kes ? RectangleF.FromLTRB(-334, -28, -204, 26) : RectangleF.FromLTRB(-388, -32, -196, 30)); // handguard
-            BodyFinish(g, body, s, t, -50, 50, -600, 300);
+            BodyFinish(g, body, s, t, -50, 50, -600, 300, 36);
         }
         // vents on the handguard
         using (var vent = new SolidBrush(Color.FromArgb(120, 0, 0, 0)))
@@ -1822,8 +1884,8 @@ class Trainer : Form
         if (hands)
             using (var glove = new SolidBrush(Color.FromArgb(28, 30, 36)))
             {
-                GFill(g, glove, PEll(-352, -4, 110, 62));   // left hand on the handguard
-                GFill(g, glove, PEll(10, 50, 86, 96));      // right hand on the grip
+                GFill(g, glove, PEll(-352, -4, 110, 62), 34);   // left hand on the handguard
+                GFill(g, glove, PEll(10, 50, 86, 96), 34);      // right hand on the grip
             }
 
         if (flash) DrawMuzzleFlash(g, muzzleX);
@@ -1831,9 +1893,9 @@ class Trainer : Form
     }
 
     // Fills the gun body with its skin color and pattern, a top-to-bottom shine, and an outline.
-    void BodyFinish(Graphics g, GraphicsPath body, Skin s, double t, float shineTop, float shineBottom, float left, float right)
+    void BodyFinish(Graphics g, GraphicsPath body, Skin s, double t, float shineTop, float shineBottom, float left, float right, float depth)
     {
-        using (var b = new SolidBrush(s.Body)) GFill(g, b, (GraphicsPath)body.Clone());
+        using (var b = new SolidBrush(s.Body)) GFill(g, b, (GraphicsPath)body.Clone(), depth);
         var clip = g.Clip; GClip(g, body);
         DrawSkinPattern(g, s, t);
         using (var shade = new LinearGradientBrush(GPt(g, 0, shineTop), GPt(g, 0, shineBottom), Color.FromArgb(50, 255, 255, 255), Color.FromArgb(80, 0, 0, 0)))
@@ -1849,22 +1911,22 @@ class Trainer : Form
         var trimC = Blend(s.Trim, Color.FromArgb(150, 156, 168), 0.22);
         if (hands)
             using (var sleeve = new SolidBrush(Color.FromArgb(44, 48, 58)))
-                GFill(g, sleeve, PPoly(Pt(-10, 110), Pt(70, 96), Pt(270, 300), Pt(120, 320)));   // forearm
+                GFill(g, sleeve, PPoly(Pt(-10, 110), Pt(70, 96), Pt(270, 300), Pt(120, 320)), 40);   // forearm
         using (var trim = new SolidBrush(trimC))
         {
-            GFill(g, trim, PPoly(Pt(-40, 14), Pt(14, 14), Pt(40, 124), Pt(-12, 132)));          // grip
+            GFill(g, trim, PPoly(Pt(-40, 14), Pt(14, 14), Pt(40, 124), Pt(-12, 132)), 24);          // grip
             var guard = new GraphicsPath(); guard.AddArc(-112, -2, 72, 52, 0, 180);
             using (var pen = new Pen(trimC, 8)) GStroke(g, pen, guard);                          // trigger guard
-            GFill(g, trim, PRect(-86, 18, -78, 36));                                              // trigger
-            GFill(g, trim, PRect(-300, -34, -288, -22));                                          // barrel tip
-            GFill(g, trim, PRect(-284, -62, -274, -48));                                          // front sight
-            GFill(g, trim, PRect(10, -62, 30, -50));                                              // rear sight
+            GFill(g, trim, PRect(-86, 18, -78, 36), 4);                                              // trigger
+            GFill(g, trim, PRect(-300, -34, -288, -22), 12);                                          // barrel tip
+            GFill(g, trim, PRect(-284, -62, -274, -48), 6);                                          // front sight
+            GFill(g, trim, PRect(10, -62, 30, -50), 10);                                              // rear sight
         }
         using (var body = new GraphicsPath { FillMode = FillMode.Winding })
         {
             body.AddPolygon(new[] { Pt(-292, -50), Pt(34, -50), Pt(42, -10), Pt(-292, -10) });      // slide
             body.AddPolygon(new[] { Pt(-262, -10), Pt(24, -10), Pt(18, 18), Pt(-254, 18) });        // frame
-            BodyFinish(g, body, s, t, -54, 22, -320, 80);
+            BodyFinish(g, body, s, t, -54, 22, -320, 80, 26);
         }
         using (var dark = new SolidBrush(Color.FromArgb(120, 0, 0, 0)))
         {
@@ -1874,8 +1936,8 @@ class Trainer : Form
         if (hands)
             using (var glove = new SolidBrush(Color.FromArgb(28, 30, 36)))
             {
-                GFill(g, glove, PEll(-70, 36, 80, 68));     // support hand
-                GFill(g, glove, PEll(-30, 36, 84, 92));     // shooting hand on the grip
+                GFill(g, glove, PEll(-70, 36, 80, 68), 30);     // support hand
+                GFill(g, glove, PEll(-30, 36, 84, 92), 34);     // shooting hand on the grip
             }
         if (flash) DrawMuzzleFlash(g, -292);
     }
@@ -1948,22 +2010,41 @@ class Trainer : Form
     }
 
     // ---------- animated menu background ----------
+    // The two big glows are slow to paint (a full-screen gradient each), so they're drawn once into a bitmap
+    // and copied in; only the scrolling grid is drawn fresh each frame.
+    Bitmap menuBg;
+    string menuBgKey = "";
+
     void DrawMenuBg(Graphics g)
     {
         float W = ClientSize.Width, H = ClientSize.Height;
         double t = sw.Elapsed.TotalSeconds;
-        g.Clear(UiBg);
         Color c = Accent;
-        foreach (var blob in new[] { new[] { 0.78, 0.12, 0.55, 0.0 }, new[] { 0.12, 0.85, 0.45, 2.0 } })
+        string key = W + "x" + H + c.ToArgb();
+        if (menuBg == null || menuBgKey != key)
         {
-            float bx3 = W * (float)(blob[0] + 0.04 * Math.Sin(t * 0.3 + blob[3])), by3 = H * (float)(blob[1] + 0.05 * Math.Cos(t * 0.25 + blob[3])), r = W * (float)blob[2];
-            using (var gp = new GraphicsPath())
+            if (menuBg != null) menuBg.Dispose();
+            menuBg = new Bitmap(Math.Max(1, (int)W), Math.Max(1, (int)H), System.Drawing.Imaging.PixelFormat.Format32bppPArgb);
+            menuBgKey = key;
+            using (var gb = Graphics.FromImage(menuBg))
             {
-                gp.AddEllipse(bx3 - r, by3 - r, r * 2, r * 2);
-                using (var pb = new PathGradientBrush(gp) { CenterColor = Color.FromArgb(26, blob[3] == 0 ? c : Color.FromArgb(255, 70, 85)), SurroundColors = new[] { Color.FromArgb(0, c) } })
-                    g.FillPath(pb, gp);
+                gb.SmoothingMode = SmoothingMode.AntiAlias;
+                gb.Clear(UiBg);
+                foreach (var blob in new[] { new[] { 0.78, 0.12, 0.55, 0.0 }, new[] { 0.12, 0.85, 0.45, 2.0 } })
+                {
+                    float bx3 = W * (float)blob[0], by3 = H * (float)blob[1], r = W * (float)blob[2];
+                    using (var gp = new GraphicsPath())
+                    {
+                        gp.AddEllipse(bx3 - r, by3 - r, r * 2, r * 2);
+                        using (var pb = new PathGradientBrush(gp) { CenterColor = Color.FromArgb(26, blob[3] == 0 ? c : Color.FromArgb(255, 70, 85)), SurroundColors = new[] { Color.FromArgb(0, c) } })
+                            gb.FillPath(pb, gp);
+                    }
+                }
             }
         }
+        var mode = g.CompositingMode; g.CompositingMode = CompositingMode.SourceCopy;
+        g.DrawImageUnscaled(menuBg, 0, 0);
+        g.CompositingMode = mode;
         float step = P(48), offs = (float)(t * 8 % step);
         using (var pen = new Pen(Color.FromArgb(10, 255, 255, 255), 1))
         {
@@ -2700,18 +2781,43 @@ class Trainer : Form
         DrawT(g, m == RCT ? "lower is better" : "higher is better", fSmall, Muted, r.Right - P(110), r.Bottom + P(6));
     }
 
+    // The round's background (color, soft glow, arena panel) never changes during a round, but painting the
+    // full-screen gradient took most of each frame. It's drawn once into a bitmap and copied in every frame.
+    Bitmap playBg;
+    string playBgKey = "";
+
+    void DrawPlayBackground(Graphics g, float W, float H)
+    {
+        string key = W + "x" + H + game.Id + arena;
+        if (playBg == null || playBgKey != key)
+        {
+            if (playBg != null) playBg.Dispose();
+            playBg = new Bitmap((int)W, (int)H, System.Drawing.Imaging.PixelFormat.Format32bppPArgb);
+            playBgKey = key;
+            using (var gb = Graphics.FromImage(playBg))
+            {
+                gb.SmoothingMode = SmoothingMode.AntiAlias;
+                gb.Clear(game.Bg);
+                using (var glow = new GraphicsPath())
+                {
+                    glow.AddEllipse(W * 0.15f, H * 0.05f, W * 0.7f, H * 0.9f);
+                    using (var pb = new PathGradientBrush(glow) { CenterColor = Color.FromArgb(34, game.Accent), SurroundColors = new[] { Color.FromArgb(0, game.Accent) } })
+                        gb.FillPath(pb, glow);
+                }
+                FillRound(gb, Blend(game.Bg, Color.White, 0.025f), arena, P(18));
+                DrawRound(gb, Blend(game.Bg, Color.White, 0.07f), arena, P(18), 1);
+            }
+        }
+        var mode = g.CompositingMode; g.CompositingMode = CompositingMode.SourceCopy;
+        g.DrawImageUnscaled(playBg, 0, 0);
+        g.CompositingMode = mode;
+    }
+
     void PaintPlay(Graphics g)
     {
         float W = ClientSize.Width, H = ClientSize.Height, m = P(28);
         if (playMode == RCT) { PaintReaction(g); return; }
-        g.Clear(game.Bg);
-        // soft colored glow behind the arena
-        using (var glow = new GraphicsPath())
-        {
-            glow.AddEllipse(W * 0.15f, H * 0.05f, W * 0.7f, H * 0.9f);
-            using (var pb = new PathGradientBrush(glow) { CenterColor = Color.FromArgb(34, game.Accent), SurroundColors = new[] { Color.FromArgb(0, game.Accent) } })
-                g.FillPath(pb, glow);
-        }
+        DrawPlayBackground(g, W, H);
 
         // everything in the world shakes a little on kills
         var saved = g.Save();
@@ -2720,8 +2826,6 @@ class Trainer : Form
             float amp = (float)(shakeT * 40 * S);
             g.TranslateTransform((float)((rnd.NextDouble() - 0.5) * amp), (float)((rnd.NextDouble() - 0.5) * amp));
         }
-        FillRound(g, Blend(game.Bg, Color.White, 0.025f), arena, P(18));
-        DrawRound(g, Blend(game.Bg, Color.White, 0.07f), arena, P(18), 1);
 
         if (playMode == FLK)
         {
