@@ -1180,15 +1180,33 @@ if (TAURI) {
     sent = key;
     TAURI.core.invoke("set_presence", Object.assign({ invite: AT.discordInvite || "" }, p)).catch(() => { sent = null; });
   }, 4000);
-  (async () => {
-    try {
-      const mine = await TAURI.app.getVersion(), rs = await releases(), latest = rs[0] && rs[0].tag_name.replace(/^v/, "");
-      // Any release that isn't this exact version counts as an update, so version numbers can restart (1.0.0).
-      const newer = latest && latest !== mine;
-      if (newer) $("update-banner").hidden = false, $("update-text").textContent = "Update available: v" + latest + " (you have v" + mine + ")";
-    } catch {}
-  })();
 }
+
+// ---------- update notice ----------
+// Checks for a new release now and every 5 minutes while the game is open, but only in the menus, never during a round.
+// Mac app: compares with the installed version and offers the download.
+// Browser: remembers the version that was current when the page loaded and offers a refresh when a newer one is out.
+const latestTag = () => fetch("https://api.github.com/repos/" + REPO + "/releases/latest", { cache: "no-store" })
+  .then(r => r.ok ? r.json() : null).then(r => r && r.tag_name ? r.tag_name.replace(/^v/, "") : "").catch(() => "");
+let loadedTag = null, toastHiddenFor = "";
+async function checkForUpdate() {
+  const latest = await latestTag();
+  if (!latest) return;
+  let mine;
+  if (TAURI) { try { mine = await TAURI.app.getVersion(); } catch { return; } }
+  else { if (loadedTag === null) loadedTag = latest; mine = loadedTag; }
+  // Any release that isn't this exact version counts as an update, so version numbers can restart (1.0.0).
+  if (latest === mine || latest === toastHiddenFor) return;
+  if (TAURI) { $("update-banner").hidden = false; $("update-text").textContent = "Update available: v" + latest + " (you have v" + mine + ")"; }
+  $("update-toast-text").textContent = TAURI ? "Update v" + latest + " is out" : "v" + latest + " is out. Refresh to play it";
+  const act = $("update-toast-go");
+  act.textContent = TAURI ? "Download" : "Refresh";
+  act.onclick = () => { if (TAURI) TAURI.opener.openUrl("https://github.com/" + REPO + "/releases/latest/download/LMGs-Aim-Trainer-mac.dmg").catch(() => {}); else location.reload(); };
+  $("update-toast-x").onclick = () => { toastHiddenFor = latest; $("update-toast").hidden = true; };
+  $("update-toast").hidden = false;
+}
+checkForUpdate();
+setInterval(() => { if (stage.hidden) checkForUpdate(); }, 5 * 60 * 1000);
 
 // ---------- loadout ----------
 function renderLoadout() {

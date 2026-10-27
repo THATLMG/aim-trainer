@@ -152,7 +152,7 @@ class Trainer : Form
 
     const string TRK = "Tracking", FLK = "Flick", BOT = "Bots", RCT = "Reaction", FND = "Sens finder", HTK = "Health Track";
     static readonly double[] DrainRate = { 110, 80, 65, 55 };   // health per second while your crosshair is on the ball
-    const string AppVersion = "1.6.4";
+    const string AppVersion = "1.6.5";
     const string Repo = "THATLMG/aim-trainer";
     static readonly string[] DiffNames = { "Easy", "Medium", "Hard", "Insane" };
     static readonly double[] BallR = { 0.045, 0.033, 0.024, 0.017 };
@@ -368,6 +368,10 @@ class Trainer : Form
         useRaw = RegisterRawInputDevices(dev, 1, (uint)Marshal.SizeOf(typeof(RAWINPUTDEVICE)));
         var t = new Thread(CheckOnline) { IsBackground = true };
         t.Start();
+        // Keep checking every 5 minutes while the app stays open, but only in the menus, never during a round.
+        var updTimer = new System.Windows.Forms.Timer { Interval = 5 * 60 * 1000 };
+        updTimer.Tick += delegate { if (scr != Scr.Play) new Thread(CheckUpdate) { IsBackground = true }.Start(); };
+        updTimer.Start();
         var mt = new Thread(MusicLoop) { IsBackground = true };
         mt.Start();
         musicTimer.Tick += delegate
@@ -687,6 +691,12 @@ class Trainer : Form
 
     void CheckOnline()
     {
+        CheckUpdate();
+        CheckNews();
+    }
+
+    void CheckUpdate()
+    {
         var js = new JavaScriptSerializer();
         try
         {
@@ -706,11 +716,20 @@ class Trainer : Form
                     string body = rel.ContainsKey("body") && rel["body"] != null ? (string)rel["body"] : "";
                     string first = body.Split('\n').Select(l => l.Trim().TrimStart('-', '*', '#', ' ')).FirstOrDefault(l => l.Length > 0) ?? "";
                     if (url != null)
-                        BeginInvoke((MethodInvoker)delegate { updVersion = tag; updNotes = first; updUrl = url; updState = "available"; Invalidate(); });
+                        BeginInvoke((MethodInvoker)delegate
+                        {
+                            if (updState == "downloading" || (updState == "later" && tag == updVersion)) return;   // "Later" lasts until the next version
+                            updVersion = tag; updNotes = first; updUrl = url; updState = "available"; Invalidate();
+                        });
                 }
             }
         }
         catch { }
+    }
+
+    void CheckNews()
+    {
+        var js = new JavaScriptSerializer();
         try
         {
             using (var wc = Web())
@@ -2400,6 +2419,26 @@ class Trainer : Form
         else PaintResults(g);
         if (MusicVisible && scr == Scr.Play) PaintMusicInRound(g);
         else if (MusicVisible && scr != Scr.Setup) PaintMusicBar(g);
+        if (scr == Scr.Game || scr == Scr.Results || scr == Scr.Loadout) PaintUpdateToast(g);
+    }
+
+    // A small notice at the top of the other menu screens (the home screen has the full banner). Never shown mid-round.
+    void PaintUpdateToast(Graphics g)
+    {
+        if (updState != "available" && updState != "downloading") return;
+        float W = ClientSize.Width, w = P(520), h = P(46);
+        var r = new RectangleF(W / 2 - w / 2, P(14), w, h);
+        AddHit(r, () => { });
+        FillRound(g, Blend(Panel, Accent, 0.28), r, h / 2);
+        DrawRound(g, Accent, r, h / 2, 1);
+        if (updState == "downloading")
+        {
+            DrawTC(g, "Downloading v" + updVersion + "…  the app restarts by itself", fBody, TextC, r);
+            return;
+        }
+        DrawT(g, "Update v" + updVersion + " is out", fBody, TextC, r.X + P(22), r.Y + P(12));
+        AddBtn(g, new RectangleF(r.Right - P(222), r.Y + P(6), P(150), h - P(12)), "Update now", DoUpdate, true, false);
+        AddBtn(g, new RectangleF(r.Right - P(64), r.Y + P(6), P(52), h - P(12)), "×", () => updState = "later", false, false);
     }
 
     static string Clock(double s) { int t = (int)Math.Max(0, s); return t / 60 + ":" + (t % 60).ToString("00"); }
