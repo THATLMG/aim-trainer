@@ -32,8 +32,27 @@ const BotU = [.075, .06, .05, .04], BotShare = [.3, .5, .7, .85], BotSpd = [2.5,
 // ---------- saved data (this browser) ----------
 const store = {
   get(k, d) { try { const v = localStorage.getItem("lmg." + k); return v ? JSON.parse(v) : d; } catch { return d; } },
-  set(k, v) { try { localStorage.setItem("lmg." + k, JSON.stringify(v)); } catch {} }
+  set(k, v) { try { localStorage.setItem("lmg." + k, JSON.stringify(v)); } catch {} backupSoon(); }
 };
+// In the Mac app every save is also copied to a file in the app's own folder, and put back if the window's storage
+// ever comes back empty (replacing the app with a new version can clear it).
+let backupTimer = 0;
+function backupSoon() {
+  if (!TAURI) return;
+  clearTimeout(backupTimer);
+  backupTimer = setTimeout(() => {
+    const all = {};
+    for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); if (k.startsWith("lmg.")) all[k] = localStorage.getItem(k); }
+    if (all["lmg.profile"]) TAURI.core.invoke("save_backup", { data: JSON.stringify(all) }).catch(() => {});   // never back up an empty start
+  }, 500);
+}
+if (TAURI && localStorage.getItem("lmg.profile") === null)
+  TAURI.core.invoke("load_backup").then(text => {
+    const saved = text ? JSON.parse(text) : null;
+    if (!saved || !saved["lmg.profile"] || localStorage.getItem("lmg.profile") !== null) return;
+    for (const [k, v] of Object.entries(saved)) if (k.startsWith("lmg.")) localStorage.setItem(k, v);
+    location.reload();
+  }).catch(() => {});
 let profile = store.get("profile", null);        // { name, dpi }
 let settings = store.get("settings", {});        // gameId -> { sens, dpi }
 let records = store.get("records", []);          // { g, m, d, s, t }
@@ -142,7 +161,7 @@ function renderGame() {
   const modes = $("modes"); modes.textContent = "";
   for (const m of [TRK, HTK, FLK, BOT, RCT, FND])
     modes.append(el("button", { class: "mode-card", "aria-pressed": String(mode === m), style: "--c:" + g.color, onclick: () => { mode = m; renderGame(); } },
-      [el("b", { text: m }), el("span", { text: MODE_DESC[m] })]));
+      [el("b", { text: m }), el("span", { text: MODE_DESC[m] }), rankTag(m)]));
   const dd = $("diffs"); dd.textContent = "";
   DIFFS.forEach((name, i) => dd.append(el("button", { class: "chip", "aria-pressed": String(diff === i), style: "--c:" + g.color, onclick: () => { diff = i; renderGame(); } }, [el("span", { text: name })])));
   $("diff-wrap").hidden = !(mode === TRK || mode === HTK || mode === FLK || mode === BOT);
@@ -164,6 +183,16 @@ $("sens").addEventListener("input", saveSensInputs);
 $("accel").addEventListener("change", e => { accelOn = e.target.checked; store.set("accel", accelOn); });
 $("dpi").addEventListener("input", saveSensInputs);
 
+// Your best rank in a mode at the chosen difficulty, from your saved rounds (-1 if none yet).
+function bestRank(m, d) {
+  const vals = history(m, d).map(r => r.s);
+  return vals.length ? rankIndex(m, d, m === RCT ? Math.min(...vals) : Math.max(...vals)) : -1;
+}
+function rankTag(m) {
+  if (m === FND) return el("i", { class: "mode-rank none", text: "No rank" });
+  const r = bestRank(m, diff);
+  return r < 0 ? el("i", { class: "mode-rank none", text: "Unranked" }) : el("i", { class: "mode-rank", style: "--rc:" + RANK_COLORS[r], text: RANKS[r] });
+}
 function renderProgress() {
   const box = $("progress"); box.textContent = "";
   if (mode === FND) { box.append(el("p", { class: "muted", text: "Five 10-second tracking rounds, each secretly at a different sensitivity (80% to 120% of yours). At the end you see which one you tracked best with, in " + GAMES[gameId].name + " numbers." })); return; }
@@ -174,7 +203,8 @@ function renderProgress() {
   box.append(el("div", { class: "row", style: "gap:26px" }, [
     el("div", {}, [el("div", { class: "muted", text: "Best" }), el("div", { class: "big", text: fmtRes(mode, best) })]),
     el("div", {}, [el("div", { class: "muted", text: "Last" }), el("div", { class: "big", text: fmtRes(mode, vals[vals.length - 1]) })]),
-    el("div", {}, [el("div", { class: "muted", text: "Rounds" }), el("div", { class: "big", text: String(vals.length) })])]));
+    el("div", {}, [el("div", { class: "muted", text: "Rounds" }), el("div", { class: "big", text: String(vals.length) })]),
+    el("div", {}, [el("div", { class: "muted", text: "Rank" }), el("div", { class: "big", style: "color:" + RANK_COLORS[rankIndex(mode, diff, best)], text: RANKS[rankIndex(mode, diff, best)] })])]));
   box.append(spark(vals.slice(-20), GAMES[gameId].color));
 }
 function fmtRes(m, v) { return m === TRK ? v.toFixed(1) + "%" : m === FLK ? Math.round(v) + " hits" : m === BOT || m === HTK ? Math.round(v) + " kills" : Math.round(v) + " ms"; }
@@ -723,7 +753,15 @@ const GUN_AREA = { l: -760, t: -130, r: 340, b: 380 };
 const gunLayer = $("gun-layer"), gctx = gunLayer.getContext("2d");
 // Set here as well as in style.css, so an old cached stylesheet can't misplace the gun.
 Object.assign(gunLayer.style, { position: "absolute", inset: "auto", left: "0", top: "0", transformOrigin: "0 0", pointerEvents: "none" });
-let gunKey = "", gunAt = -1;
+let gunKey = "", gunAt = -1, gunAlpha = 1, gunAlphaT = -1;   // the gun turns see-through while a bot or the crosshair is behind it
+// Rough outline of the gun and arms in model units, to tell when something is hidden behind them.
+const GUN_HULL = [[-580, -45], [-140, -70], [240, -52], [330, 300], [160, 350], [-145, 350], [-335, 45], [-580, 28]];
+function inPoly(pts, x, y) {
+  let inside = false;
+  for (let i = 0, j = pts.length - 1; i < pts.length; j = i++)
+    if ((pts[i][1] > y) !== (pts[j][1] > y) && x < (pts[j][0] - pts[i][0]) * (y - pts[i][1]) / (pts[j][1] - pts[i][1]) + pts[i][0]) inside = !inside;
+  return inside;
+}
 function hideGun() { if (gunLayer.style.display !== "none") gunLayer.style.display = "none"; }
 // The perspective transform that maps the unit square onto 4 corners (top-left, top-right, bottom-right, bottom-left).
 function squareToQuad([x0, y0], [x1, y1], [x2, y2], [x3, y3]) {
@@ -781,8 +819,9 @@ function drawGunWalls(parts, P3, S3, D, U) {
   }
 }
 function drawAimedGun(now) {
-  const pistol = loadout.gun === "sparrow", f = H * .9, A = GUN_AREA;
-  const x0 = (pistol ? 250 : 300) + S.sway * 2, y0 = (pistol ? 185 : 215) + Math.sin(now * 1.6) * 3 + S.recoil * 8, z0 = 680 - S.recoil * 45;
+  const pistol = loadout.gun === "sparrow", botRound = S.mode === BOT, f = H * .9, A = GUN_AREA;
+  // In Bots the gun sits lower and further right: the nearest bots stand at the bottom of the screen.
+  const x0 = (pistol ? 250 : 300) + (botRound ? 40 : 0) + S.sway * 2, y0 = (pistol ? 185 : 215) + (botRound ? 75 : 0) + Math.sin(now * 1.6) * 3 + S.recoil * 8, z0 = 680 - S.recoil * 45;
   // Barrel direction: mostly straight ahead, angled a little toward the middle, nudged slightly toward the
   // crosshair (never outward, or the gun would turn edge-on) and kicked up by recoil.
   let dx = Math.min(.06, (S.cx - W / 2) / f * .15) - .05, dy = (S.cy - H / 2) / f * .12 - .03 - S.recoil * .07, dz = 1;
@@ -794,9 +833,19 @@ function drawAimedGun(now) {
   let sx = uy * dz - uz * dy, sy = uz * dx - ux * dz, sz = ux * dy - uy * dx; if (sx < 0) { sx = -sx; sy = -sy; sz = -sz; }
   const P3 = (lx, ly, side) => [x0 - lx * dx + ly * ux + side * sx, y0 - lx * dy + ly * uy + side * sy, z0 - lx * dz + ly * uz + side * sz];
   const S3 = v => [W / 2 + f * v[0] / v[2], H / 2 + f * v[1] / v[2]];
+  // Fade toward see-through while the crosshair or a living bot is behind the gun, and back when it's clear.
+  const hull = GUN_HULL.map(([x, y]) => proj(x, y));
+  let hidden = inPoly(hull, S.cx, S.cy);
+  if (botRound && !hidden)
+    hidden = S.bots.some(b => !b.dead && [[0, 0], [-.5, 0], [.5, 0], [0, -1.3], [-.5, -1.3], [.5, -1.3], [0, -2.6]].some(([kx, ky]) => inPoly(hull, b.x + kx * b.u, b.ground + ky * b.u)));
+  const fdt = gunAlphaT < 0 ? 1 : Math.max(0, Math.min(1, now - gunAlphaT)); gunAlphaT = now;
+  gunAlpha += ((hidden ? .3 : 1) - gunAlpha) * Math.min(1, fdt * 12);
+
   const rec = wallRecorder();
   drawGunModel(rec, 0, 0, 1, 0, now, currentSkin(), loadout.gun, false, true);
+  ctx.globalAlpha = gunAlpha;
   drawGunWalls(rec.parts, P3, S3, [dx, dy, dz], [ux, uy, uz]);
+  ctx.globalAlpha = 1;
 
   if (S.tracer && S.tracer.t > 0) {
     const m = proj(pistol ? -385 : loadout.gun === "kestrel" ? -600 : -570, -3);
@@ -815,6 +864,7 @@ function drawAimedGun(now) {
   }
   const q = squareToQuad(proj(A.l, A.t), proj(A.r, A.t), proj(A.r, A.b), proj(A.l, A.b));
   gunLayer.style.transform = "matrix3d(" + [q.a / w, q.d / w, 0, q.g / w, q.b / h, q.e / h, 0, q.h / h, 0, 0, 1, 0, q.c, q.f, 0, 1].join(",") + ")";
+  gunLayer.style.opacity = gunAlpha > .98 ? "" : gunAlpha.toFixed(2);
   if (gunLayer.style.display !== "block") gunLayer.style.display = "block";
 }
 function skinPattern(c, s, t) {

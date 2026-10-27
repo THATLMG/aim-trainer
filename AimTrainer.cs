@@ -152,7 +152,7 @@ class Trainer : Form
 
     const string TRK = "Tracking", FLK = "Flick", BOT = "Bots", RCT = "Reaction", FND = "Sens finder", HTK = "Health Track";
     static readonly double[] DrainRate = { 110, 80, 65, 55 };   // health per second while your crosshair is on the ball
-    const string AppVersion = "1.6.6";
+    const string AppVersion = "1.6.7";
     const string Repo = "THATLMG/aim-trainer";
     static readonly string[] DiffNames = { "Easy", "Medium", "Hard", "Insane" };
     static readonly double[] BallR = { 0.045, 0.033, 0.024, 0.017 };
@@ -190,6 +190,10 @@ class Trainer : Form
     long noticeId, seenNotice;
     string noticeText = "", noticeMsg = "";
     bool noticeImportant;
+    // Owner only: reviews of 4/10 and below from the website that this PC hasn't seen yet.
+    string seenReviewAt = "", lowReviewAt = "", lowReviewText = "";
+    int lowReviewCount;
+    const string ReviewsUrl = SiteUrl + "reviews.html";
 
     Dictionary<string, double[]> settings = new Dictionary<string, double[]>();
     List<Rec> recs = new List<Rec>();
@@ -384,7 +388,7 @@ class Trainer : Form
         t.Start();
         // Keep checking every 5 minutes while the app stays open, but only in the menus, never during a round.
         var updTimer = new System.Windows.Forms.Timer { Interval = 5 * 60 * 1000 };
-        updTimer.Tick += delegate { if (scr != Scr.Play) new Thread(delegate() { CheckUpdate(); CheckNotices(); }) { IsBackground = true }.Start(); };
+        updTimer.Tick += delegate { if (scr != Scr.Play) new Thread(delegate() { CheckUpdate(); CheckNotices(); CheckLowReviews(); }) { IsBackground = true }.Start(); };
         updTimer.Start();
         var mt = new Thread(MusicLoop) { IsBackground = true };
         mt.Start();
@@ -708,6 +712,7 @@ class Trainer : Form
         CheckUpdate();
         CheckNews();
         CheckNotices();
+        CheckLowReviews();
     }
 
     // The newest notice from the last 24 hours, if this player hasn't closed it yet.
@@ -794,6 +799,91 @@ class Trainer : Form
         BeginInvoke((MethodInvoker)delegate { noticeMsg = msg; Invalidate(); });
     }
 
+    // Owner only: asks the database for reviews of 4/10 and below changed since the last one seen on this PC.
+    void CheckLowReviews()
+    {
+        if (ownerKey == "") return;
+        try
+        {
+            var rows = OwnerReviews(4, seenReviewAt == "" ? "1970-01-01T00:00:00Z" : seenReviewAt);
+            if (rows.Count == 0) return;
+            string at = Convert.ToString(rows[0]["updated_at"]);
+            string text = Convert.ToInt32(rows[0]["rating"]) + "/10  ·  " + Convert.ToString(rows[0]["text"]).Replace("\n", " ");
+            int n = rows.Count;
+            BeginInvoke((MethodInvoker)delegate { if (at != seenReviewAt) { lowReviewAt = at; lowReviewText = text; lowReviewCount = n; Invalidate(); } });
+        }
+        catch { }
+    }
+
+    List<Dictionary<string, object>> OwnerReviews(int maxRating, string since)
+    {
+        using (var wc = Web())
+        {
+            wc.Headers["apikey"] = SupabaseKey;
+            wc.Headers["Content-Type"] = "application/json";
+            var body = new JavaScriptSerializer().Serialize(new Dictionary<string, object> { { "p_key", ownerKey }, { "p_max_rating", maxRating }, { "p_since", since } });
+            var list = new JavaScriptSerializer().DeserializeObject(wc.UploadString(SupabaseUrl + "/rest/v1/rpc/owner_reviews", "POST", body)) as object[];
+            return list == null ? new List<Dictionary<string, object>>() : list.Cast<Dictionary<string, object>>().ToList();
+        }
+    }
+
+    void DismissLowReviews()
+    {
+        if (lowReviewAt != "") seenReviewAt = lowReviewAt;
+        lowReviewText = ""; lowReviewCount = 0;
+        Save();
+    }
+
+    // Owner only: a window listing every review (newest first), with the low ones marked.
+    void OpenReviewsWindow()
+    {
+        DismissLowReviews();
+        var f = new Form
+        {
+            Text = "Reviews", FormBorderStyle = FormBorderStyle.Sizable, StartPosition = FormStartPosition.CenterParent,
+            MinimizeBox = false, ShowInTaskbar = false, BackColor = Panel, ForeColor = TextC, Font = fBody,
+            ClientSize = new Size((int)P(720), (int)P(560))
+        };
+        var info = new Label { Text = "Loading…", ForeColor = Muted, Font = fSmall, Dock = DockStyle.Top, Height = (int)P(30), Padding = new Padding((int)P(12), (int)P(8), 0, 0) };
+        var box = new TextBox { Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Vertical, BackColor = UiBg, ForeColor = TextC, BorderStyle = BorderStyle.None, Dock = DockStyle.Fill };
+        f.Controls.Add(box); f.Controls.Add(info);
+        f.Shown += delegate
+        {
+            new Thread(delegate()
+            {
+                string head, all;
+                try
+                {
+                    var rows = OwnerReviews(10, "1970-01-01T00:00:00Z");
+                    var sb = new System.Text.StringBuilder();
+                    foreach (var r in rows)
+                    {
+                        int rating = Convert.ToInt32(r["rating"]);
+                        DateTime when; DateTime.TryParse(Convert.ToString(r["updated_at"]), CultureInfo.InvariantCulture, DateTimeStyles.None, out when);
+                        string name = Convert.ToString(r["name"]), plat = Convert.ToString(r["platform"]), text = Convert.ToString(r["text"]);
+                        sb.Append(rating <= 4 ? "⚠ " : "").Append(rating).Append("/10   ").Append(name == "" ? "Anonymous" : name)
+                          .Append(plat != "" ? "  ·  " + plat : "").Append("  ·  ").Append(when.ToString("MMM d, yyyy h:mm tt")).Append("\r\n")
+                          .Append(text == "" ? "(no comment)" : text.Replace("\r", "").Replace("\n", "\r\n")).Append("\r\n\r\n");
+                    }
+                    int low = rows.Count(r => Convert.ToInt32(r["rating"]) <= 4);
+                    head = rows.Count == 0 ? "No reviews yet." : rows.Count + (rows.Count == 1 ? " review" : " reviews") + ", " + low + " at 4/10 or below (marked ⚠). Newest first.";
+                    all = sb.ToString();
+                }
+                catch (WebException ex)
+                {
+                    string detail = "";
+                    try { using (var rd = new StreamReader(ex.Response.GetResponseStream())) detail = rd.ReadToEnd(); } catch { }
+                    head = detail.Contains("owner_reviews") ? "Run supabase/006_reviews.sql in Supabase first."
+                        : detail.Contains("Not allowed") ? "This PC's owner key isn't accepted." : "Couldn't load reviews. Check your internet.";
+                    all = "";
+                }
+                catch { head = "Couldn't load reviews."; all = ""; }
+                try { f.BeginInvoke((MethodInvoker)delegate { info.Text = head; box.Text = all; box.Select(0, 0); }); } catch { }
+            }) { IsBackground = true }.Start();
+        };
+        using (f) f.ShowDialog(this);
+    }
+
     void CheckUpdate()
     {
         var js = new JavaScriptSerializer();
@@ -862,7 +952,7 @@ class Trainer : Form
                 File.Move(exe, old);      // Windows lets a running program be renamed, not overwritten
                 try { File.Move(tmp, exe); }
                 catch { File.Move(old, exe); throw; }
-                BeginInvoke((MethodInvoker)delegate { UnlockMouse(); Process.Start(exe); Close(); });
+                BeginInvoke((MethodInvoker)delegate { UnlockMouse(); Save(); Process.Start(exe); Close(); });
             }
             catch
             {
@@ -907,18 +997,23 @@ class Trainer : Form
     double Sens(GameInfo g) { double[] v; return settings.TryGetValue(g.Id, out v) ? v[0] : g.DefaultSens; }
     double Dpi(GameInfo g) { double[] v; return settings.TryGetValue(g.Id, out v) ? v[1] : globalDpi; }
 
+    // Reads data.txt, or the backup copy if data.txt is missing, empty or unreadable, so an update or a crash
+    // in the middle of saving never wipes someone's name, settings, ranks and unlocks.
     void LoadData()
     {
-        try
+        string[] lines = ReadDataFile(dataPath);
+        if (lines == null || !lines.Any(l => l.StartsWith("P\t"))) lines = ReadDataFile(dataPath + ".bak") ?? lines;
+        if (lines == null) return;
+        var ci = CultureInfo.InvariantCulture;
+        foreach (var line in lines)
         {
-            if (!File.Exists(dataPath)) return;
-            var ci = CultureInfo.InvariantCulture;
-            foreach (var line in File.ReadAllLines(dataPath))
+            try   // one bad line skips just that line, not everything after it
             {
                 var p = line.Split('\t');
                 if (p[0] == "P" && p.Length >= 3) { playerName = CleanName(p[1]); globalDpi = double.Parse(p[2], ci); }
                 if (p[0] == "N" && p.Length >= 2) seenNews = p[1];
                 if (p[0] == "T" && p.Length >= 2) long.TryParse(p[1], out seenNotice);
+                if (p[0] == "V" && p.Length >= 2) seenReviewAt = p[1];
                 if (p[0] == "M" && p.Length >= 2) musicOn = p[1] == "1";
                 if (p[0] == "M2" && p.Length >= 2) lyricsInRound = p[1] == "1";
                 if (p[0] == "D" && p.Length >= 2) discordOn = p[1] == "1";
@@ -929,8 +1024,19 @@ class Trainer : Form
                 if (p[0] == "R" && p.Length >= 6)
                     recs.Add(new Rec { Game = p[1], Mode = p[2], Diff = int.Parse(p[3], ci), Score = double.Parse(p[4], ci), When = DateTime.Parse(p[5], ci) });
             }
+            catch { }
         }
-        catch { }
+    }
+
+    static string[] ReadDataFile(string path)
+    {
+        for (int i = 0; i < 5; i++)   // another copy of the app may be writing it right now
+        {
+            try { return File.Exists(path) ? File.ReadAllLines(path) : null; }
+            catch (IOException) { Thread.Sleep(80); }
+            catch { return null; }
+        }
+        return null;
     }
 
     void Save()
@@ -942,6 +1048,7 @@ class Trainer : Form
             if (playerName != "") lines.Add(string.Format(ci, "P\t{0}\t{1}", playerName, globalDpi));
             if (seenNews != "") lines.Add("N\t" + seenNews.Replace("\t", " "));
             if (seenNotice > 0) lines.Add("T\t" + seenNotice);
+            if (seenReviewAt != "") lines.Add("V\t" + seenReviewAt);
             lines.Add("M\t" + (musicOn ? "1" : "0"));
             lines.Add("M2\t" + (lyricsInRound ? "1" : "0"));
             lines.Add("D\t" + (discordOn ? "1" : "0"));
@@ -950,8 +1057,14 @@ class Trainer : Form
             lines.Add(string.Format(ci, "K\t{0}\t{1}", bestRankEver, bestBotKills));
             foreach (var kv in settings) lines.Add(string.Format(ci, "S\t{0}\t{1}\t{2}", kv.Key, kv.Value[0], kv.Value[1]));
             foreach (var r in recs) lines.Add(string.Format(ci, "R\t{0}\t{1}\t{2}\t{3}\t{4:yyyy-MM-dd HH:mm}", r.Game, r.Mode, r.Diff, r.Score, r.When));
+            // Write a new file first and swap it in, keeping the last good copy as data.txt.bak, so the file is never half written.
             Directory.CreateDirectory(Path.GetDirectoryName(dataPath));
-            File.WriteAllLines(dataPath, lines);
+            string tmp = dataPath + ".tmp", bak = dataPath + ".bak";
+            File.WriteAllLines(tmp, lines);
+            if (!File.Exists(dataPath)) File.Move(tmp, dataPath);
+            else
+                try { File.Replace(tmp, dataPath, bak, true); }
+                catch { File.Copy(dataPath, bak, true); File.Copy(tmp, dataPath, true); File.Delete(tmp); }
         }
         catch { }
     }
@@ -1753,6 +1866,13 @@ class Trainer : Form
         if (t != null && !lower) t = t.Select(x => Math.Round(x * k, m == TRK ? 0 : 0)).ToArray();
         return t;
     }
+    // Your best rank in a mode at a difficulty, from your saved rounds in the current game (-1 if none yet).
+    int BestRank(string m, int d)
+    {
+        var h = History(m, d);
+        if (h.Count == 0) return -1;
+        return RankIndex(m, d, m == RCT ? h.Min(r => r.Score) : h.Max(r => r.Score));
+    }
     static int RankIndex(string m, int d, double score)
     {
         bool lower;
@@ -1818,12 +1938,18 @@ class Trainer : Form
     Func<double, double, double, double[]> gun3D;      // model point + distance into the gun -> 3D point
     Func<double[], PointF> gunScreen3;                 // 3D point -> screen
     double[] gunDir, gunDown;                          // the barrel and "down" directions in 3D
+    // Rough outline of the gun and arms in model units, to tell when something is hidden behind them.
+    static readonly PointF[] GunHull = { new PointF(-580, -45), new PointF(-140, -70), new PointF(240, -52), new PointF(330, 300),
+                                         new PointF(160, 350), new PointF(-145, 350), new PointF(-335, 45), new PointF(-580, 28) };
+    double gunAlpha = 1, gunAlphaT = -1;   // the gun turns see-through while a bot or the crosshair is behind it
+    Bitmap gunBmp;                         // where the gun is drawn first when it's see-through
 
     void DrawGun(Graphics g, float W, float H, double t)
     {
-        bool pistol = gunId == "sparrow";
+        bool pistol = gunId == "sparrow", botRound = playMode == BOT;
         float f = H * 0.9f;   // focal length: how strong the perspective is
-        double x0 = (pistol ? 250 : 300) + sway * 2, y0 = (pistol ? 185 : 215) + Math.Sin(t * 1.6) * 3 + recoil * 8, z0 = 680 - recoil * 45;
+        // In Bots the gun sits lower and further right: the nearest bots stand at the bottom of the screen.
+        double x0 = (pistol ? 250 : 300) + (botRound ? 40 : 0) + sway * 2, y0 = (pistol ? 185 : 215) + (botRound ? 75 : 0) + Math.Sin(t * 1.6) * 3 + recoil * 8, z0 = 680 - recoil * 45;
         // Barrel direction: mostly straight ahead, angled a little toward the middle, nudged slightly toward the
         // crosshair (never outward, or the gun would turn edge-on) and kicked up by recoil.
         double dx = Math.Min(0.06, (cx - W / 2) / f * 0.15) - 0.05, dy = (cy - H / 2) / f * 0.12 - 0.03 - recoil * 0.07, dz = 1;
@@ -1846,23 +1972,69 @@ class Trainer : Form
                 g.DrawLine(pen, m.X, m.Y, tracerX, tracerY);
         }
 
-        // Drawing happens in screen pixels, so carry over the current transform (screen shake).
-        var screen = g.Transform;
-        var area = new[] { proj(GunL, GunT), proj(GunR, GunT), proj(GunL, GunB), proj(GunR, GunB) };
-        screen.TransformPoints(area);
-        var st = g.Save();
-        g.ResetTransform();
-        gunWarp = area;
-        gunProjPt = p => { var a = new[] { proj(p.X, p.Y) }; screen.TransformPoints(a); return a[0]; };
-        gun3D = (lx, ly, side) => new[] { x0 - lx * dx + ly * ux + side * sx, y0 - lx * dy + ly * uy + side * sy, z0 - lx * dz + ly * uz + side * sz };
-        gunScreen3 = v => { var a = new[] { new PointF(W / 2 + (float)(f * v[0] / v[2]), H / 2 + (float)(f * v[1] / v[2])) }; screen.TransformPoints(a); return a[0]; };
-        gunDir = new[] { dx, dy, dz }; gunDown = new[] { ux, uy, uz };
-        try
+        // Fade toward see-through while the crosshair or a living bot is behind the gun, and back when it's clear.
+        bool hidden = false;
+        var hullPts = GunHull.Select(p => proj(p.X, p.Y)).ToArray();
+        using (var hull = new GraphicsPath())
         {
-            gunPass = 1; DrawGunModel(g, 0, 0, 1, 0, t, CurrentSkin, gunId, muzzleT > 0, true);
-            gunPass = 2; DrawGunModel(g, 0, 0, 1, 0, t, CurrentSkin, gunId, muzzleT > 0, true);
+            hull.AddPolygon(hullPts);
+            hidden = hull.IsVisible(cx, cy);
+            if (botRound)
+                using (var region = new Region(hull))
+                    foreach (var b in bots)
+                        if (!b.Dead && region.IsVisible(new RectangleF((float)(b.X - b.U / 2), (float)(b.Ground - 2.6 * b.U), (float)b.U, (float)(2.6 * b.U)))) { hidden = true; break; }
         }
-        finally { gunPass = 0; gunWarp = null; gunProjPt = null; g.Restore(st); screen.Dispose(); }
+        double fdt = gunAlphaT < 0 ? 1 : Math.Max(0, Math.Min(1, t - gunAlphaT));
+        gunAlphaT = t;
+        gunAlpha += ((hidden ? 0.3 : 1) - gunAlpha) * Math.Min(1, fdt * 12);
+
+        Action<Graphics> paint = gg =>
+        {
+            // Drawing happens in screen pixels, so carry over the current transform (screen shake).
+            var screen = gg.Transform;
+            var area = new[] { proj(GunL, GunT), proj(GunR, GunT), proj(GunL, GunB), proj(GunR, GunB) };
+            screen.TransformPoints(area);
+            var st = gg.Save();
+            gg.ResetTransform();
+            gunWarp = area;
+            gunProjPt = p => { var a = new[] { proj(p.X, p.Y) }; screen.TransformPoints(a); return a[0]; };
+            gun3D = (lx, ly, side) => new[] { x0 - lx * dx + ly * ux + side * sx, y0 - lx * dy + ly * uy + side * sy, z0 - lx * dz + ly * uz + side * sz };
+            gunScreen3 = v => { var a = new[] { new PointF(W / 2 + (float)(f * v[0] / v[2]), H / 2 + (float)(f * v[1] / v[2])) }; screen.TransformPoints(a); return a[0]; };
+            gunDir = new[] { dx, dy, dz }; gunDown = new[] { ux, uy, uz };
+            try
+            {
+                gunPass = 1; DrawGunModel(gg, 0, 0, 1, 0, t, CurrentSkin, gunId, muzzleT > 0, true);
+                gunPass = 2; DrawGunModel(gg, 0, 0, 1, 0, t, CurrentSkin, gunId, muzzleT > 0, true);
+            }
+            finally { gunPass = 0; gunWarp = null; gunProjPt = null; gg.Restore(st); screen.Dispose(); }
+        };
+        if (gunAlpha > 0.98) { paint(g); return; }
+
+        // See-through: draw the gun onto a spare bitmap, then copy just its corner of the screen over at partial opacity.
+        int bw = (int)W, bh = (int)H;
+        if (gunBmp == null || gunBmp.Width != bw || gunBmp.Height != bh)
+        {
+            if (gunBmp != null) gunBmp.Dispose();
+            gunBmp = new Bitmap(bw, bh, System.Drawing.Imaging.PixelFormat.Format32bppPArgb);
+        }
+        var box = Rectangle.Intersect(new Rectangle(0, 0, bw, bh), Rectangle.Round(RectangleF.FromLTRB(
+            hullPts.Min(p => p.X) - 60, hullPts.Min(p => p.Y) - 60, W, H)));
+        if (box.Width <= 0 || box.Height <= 0) return;
+        using (var gg = Graphics.FromImage(gunBmp))
+        {
+            gg.SetClip(box); gg.Clear(Color.Transparent);
+            gg.SmoothingMode = g.SmoothingMode; gg.PixelOffsetMode = g.PixelOffsetMode;
+            using (var m = g.Transform) gg.Transform = m;
+            paint(gg);
+        }
+        using (var ia = new System.Drawing.Imaging.ImageAttributes())
+        {
+            ia.SetColorMatrix(new System.Drawing.Imaging.ColorMatrix { Matrix33 = (float)gunAlpha });
+            var st = g.Save();
+            g.ResetTransform();
+            g.DrawImage(gunBmp, box, box.X, box.Y, box.Width, box.Height, GraphicsUnit.Pixel, ia);
+            g.Restore(st);
+        }
     }
 
     // ----- shape helpers: draw flat normally, or warped onto the 3D plane while gunWarp is set -----
@@ -2733,10 +2905,12 @@ class Trainer : Form
         float W = ClientSize.Width, H = ClientSize.Height, m = P(48);
         DrawMenuBg(g);
         DrawT(g, AppName.ToUpper(), fTitle, TextC, m, m);
+        AddBtn(g, new RectangleF(m + P(400), m + P(6), P(150), P(36)), "Rate the app", () => { try { Process.Start(ReviewsUrl); } catch { } }, false, false);
         if (ownerKey != "")
         {
-            AddBtn(g, new RectangleF(m + P(400), m + P(6), P(150), P(36)), "Send notice", OpenNoticeComposer, false, false);
-            if (noticeMsg != "") DrawT(g, noticeMsg, fSmall, Muted, m + P(564), m + P(16));
+            AddBtn(g, new RectangleF(m + P(562), m + P(6), P(150), P(36)), "Send notice", OpenNoticeComposer, false, false);
+            AddBtn(g, new RectangleF(m + P(724), m + P(6), P(120), P(36)), "Reviews", OpenReviewsWindow, false, false);
+            if (noticeMsg != "") DrawT(g, noticeMsg, fSmall, Muted, m + P(858), m + P(16));
         }
         DrawT(g, "Playing as " + playerName + "  ·  " + globalDpi + " DPI.  Pick the game you want to practise for.", fBody, Muted, m + 2, m + P(56));
         AddBtn(g, new RectangleF(W - m - P(100), m, P(100), P(40)), "Exit", Close, false, false);
@@ -2781,6 +2955,20 @@ class Trainer : Form
             DrawTW(g, noticeText, fBody, TextC, new RectangleF(r.X + P(120), r.Y + P(15), r.Width - P(260), r.Height - P(20)));
             AddBtn(g, new RectangleF(r.Right - P(130), r.Y + P(10), P(110), P(38)), "Got it", DismissNotice, false, false);
             bannerY += r.Height + P(12);
+        }
+        if (lowReviewText != "")
+        {
+            Color c = Color.FromArgb(255, 70, 85);
+            var r = new RectangleF(m, bannerY, W - 2 * m, P(58));
+            FillRound(g, Blend(Panel, c, 0.18), r, P(10));
+            DrawRound(g, c, r, P(10), 1);
+            DrawT(g, lowReviewCount > 1 ? lowReviewCount + " LOW REVIEWS" : "LOW REVIEW", fLabel, c, r.X + P(20), r.Y + P(20));
+            using (var sf = new StringFormat(StringFormatFlags.NoWrap) { Trimming = StringTrimming.EllipsisCharacter })
+            using (var b = new SolidBrush(TextC))
+                g.DrawString(lowReviewText, fBody, b, new RectangleF(r.X + P(170), r.Y + P(17), r.Width - P(440), P(26)), sf);
+            AddBtn(g, new RectangleF(r.Right - P(250), r.Y + P(10), P(110), P(38)), "Read", OpenReviewsWindow, true, false);
+            AddBtn(g, new RectangleF(r.Right - P(130), r.Y + P(10), P(110), P(38)), "Got it", DismissLowReviews, false, false);
+            bannerY += P(70);
         }
         if (newsText != "")
         {
@@ -2862,7 +3050,7 @@ class Trainer : Form
             "Strafing and standing bots with 3 HP. Headshots kill instantly.",
             "Click the moment the screen turns green. 5 tries.",
             "5 short tracking rounds at hidden sens values. Finds the one you aim best with." };
-        float gap = P(12), cw = (w2 - 5 * gap) / 6, ch = P(150);
+        float gap = P(12), cw = (w2 - 5 * gap) / 6, ch = P(182);
         for (int i = 0; i < modes.Length; i++)
         {
             var r = new RectangleF(x2 + i * (cw + gap), top + P(26), cw, ch);
@@ -2870,7 +3058,16 @@ class Trainer : Form
             FillRound(g, sel ? Blend(Panel, game.Accent, 0.18) : (hover ? PanelHi : Panel), r, P(12));
             if (sel) DrawRound(g, game.Accent, r, P(12), 2);
             DrawT(g, modes[i], fH3, sel ? game.Accent : TextC, r.X + P(16), r.Y + P(14));
-            DrawTW(g, desc[i], fSmall, Muted, new RectangleF(r.X + P(16), r.Y + P(46), r.Width - P(28), r.Height - P(50)));
+            DrawTW(g, desc[i], fSmall, Muted, new RectangleF(r.X + P(16), r.Y + P(46), r.Width - P(28), r.Height - P(84)));
+            // your best rank in this mode at the chosen difficulty
+            int rk = modes[i] == FND ? -2 : BestRank(modes[i], diff);
+            float ry = r.Bottom - P(36);
+            if (rk >= 0)
+            {
+                DrawRankBadge(g, r.X + P(12), ry, P(26), rk, 1);
+                DrawT(g, RankNames[rk].ToUpper(), fLabel, RankColors[rk], r.X + P(44), ry + P(5));
+            }
+            else DrawT(g, rk == -2 ? "No rank" : "Unranked", fSmall, Muted, r.X + P(16), ry + P(4));
             var mi = modes[i];
             AddHit(r, () => mode = mi);
         }
@@ -2910,7 +3107,10 @@ class Trainer : Form
             return;
         }
         double best = lower ? hist.Min(r => r.Score) : hist.Max(r => r.Score);
-        DrawT(g, "Best  " + FmtScore(mode, best) + "      Last  " + FmtScore(mode, hist.Last().Score) + "      Rounds  " + hist.Count, fH3, TextC, pr.X + P(20), pr.Y + P(44));
+        string bestLine = "Best  " + FmtScore(mode, best) + "      Last  " + FmtScore(mode, hist.Last().Score) + "      Rounds  " + hist.Count + "      Rank";
+        DrawT(g, bestLine, fH3, TextC, pr.X + P(20), pr.Y + P(44));
+        int prk = RankIndex(mode, diff, best);
+        if (prk >= 0) DrawT(g, RankNames[prk], fH3, RankColors[prk], pr.X + P(20) + g.MeasureString(bestLine, fH3).Width + P(4), pr.Y + P(44));
         var chart = new RectangleF(pr.X + P(60), pr.Y + P(90), pr.Width - P(90), pr.Height - P(120));
         if (chart.Height > P(50)) DrawChart(g, chart, hist.Skip(Math.Max(0, hist.Count - 20)).Select(r => r.Score).ToList(), mode);
     }

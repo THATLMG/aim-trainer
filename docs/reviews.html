@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Reviews · LMG's Aim Trainer</title>
+<meta name="description" content="Rate LMG's Aim Trainer from 1 to 10 and tell the developer what to fix.">
+<link rel="icon" href="rpc/logo.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;600;700&family=Barlow:wght@400;500;600&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="backdrop" aria-hidden="true"></div>
+<nav class="nav">
+  <div class="wrap">
+    <a class="logo" href="index.html">
+      <img src="rpc/logo.png" width="30" height="30" alt="" style="border-radius:7px">
+      LMG's Aim Trainer
+    </a>
+    <div class="links">
+      <a class="hide-sm" href="index.html">Home</a>
+      <a href="board.html">Leaderboard</a>
+      <a class="btn small cyan" href="play.html">Play</a>
+      <a class="btn small primary dl-link" href="#">Download</a>
+    </div>
+  </div>
+</nav>
+
+<main class="wrap app reviews">
+  <div>
+    <span class="eyebrow">What do you think?</span>
+    <h2 style="margin-top:8px">Reviews</h2>
+  </div>
+
+  <div class="rv-grid">
+    <section class="panel stack" id="summary" aria-live="polite">
+      <p class="label">Overall</p>
+      <p class="muted" id="summary-empty">Loading…</p>
+    </section>
+
+    <section class="panel">
+      <form class="stack" id="form">
+        <p class="label" id="form-title">Rate the aim trainer</p>
+        <div>
+          <div class="rv-scale" id="scale" role="radiogroup" aria-label="Rating from 1 to 10"></div>
+          <div class="rv-ends"><span>1 · bad</span><span>10 · amazing</span></div>
+        </div>
+        <label class="stack" style="gap:6px">
+          <span class="label" id="text-label">Anything you'd like to say? (optional)</span>
+          <textarea id="text" maxlength="600" rows="5" placeholder="What you like, what's missing, what's broken…"></textarea>
+          <span class="muted rv-count" id="count">0 / 600</span>
+        </label>
+        <label class="stack" style="gap:6px">
+          <span class="label">Name (optional)</span>
+          <input type="text" id="name" maxlength="24" placeholder="Anonymous" autocomplete="nickname">
+        </label>
+        <div id="msg"></div>
+        <div class="row" style="align-items:center">
+          <button type="submit" class="btn primary" id="send">Send review</button>
+          <span class="muted" style="font-size:14px">Only the developer sees what you write. The rating counts toward the average.</span>
+        </div>
+      </form>
+    </section>
+  </div>
+
+  <section class="panel stack" id="owner" hidden>
+    <div class="row" style="justify-content:space-between;align-items:center">
+      <p class="label" style="margin:0">All reviews · only you can see these</p>
+      <div class="seg" style="margin:0" id="owner-filter">
+        <button type="button" data-f="low" aria-pressed="true">4 and below</button>
+        <button type="button" data-f="all" aria-pressed="false">All</button>
+      </div>
+    </div>
+    <div id="owner-list"></div>
+  </section>
+</main>
+
+<footer><div class="wrap"><span>LMG's Aim Trainer · made by THATLMG</span><span><a href="index.html">Home</a> · <a href="https://github.com/THATLMG/aim-trainer">GitHub</a></span></div></footer>
+
+<script src="config.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
+<script src="common.js"></script>
+<script>
+document.querySelectorAll(".dl-link").forEach(a => a.href = DOWNLOAD_URL);
+
+// One review per browser: a random id kept here lets you change your review later.
+let device = "";
+try { device = localStorage.getItem("at.reviewDevice") || ""; } catch {}
+if (!/^[0-9a-f]{32}$/.test(device)) {
+  device = Array.from(crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2, "0")).join("");
+  try { localStorage.setItem("at.reviewDevice", device); } catch {}
+}
+const platform = TAURI ? "Mac app" : /Mobi|Android|iPhone|iPad/.test(navigator.userAgent) ? "Phone" : "Browser";
+let rating = 0, ownerFilter = "low", ownerRows = [];
+
+// Prefill the name from the browser game's profile.
+try { const p = JSON.parse(localStorage.getItem("lmg.profile") || "null"); if (p && p.name) $("name").value = p.name; } catch {}
+
+const ratingColor = r => r <= 4 ? "var(--bad)" : r <= 6 ? "#f5b841" : "var(--ok)";
+function drawScale() {
+  const box = $("scale"); box.textContent = "";
+  for (let i = 1; i <= 10; i++)
+    box.append(el("button", { type: "button", role: "radio", "aria-checked": String(rating === i), class: "rv-num", style: "--rc:" + ratingColor(i), text: String(i),
+      onclick: () => { rating = i; drawScale(); updateText(); } }));
+}
+function updateText() {
+  const low = rating > 0 && rating <= 4;
+  $("text-label").textContent = low ? "What's wrong? Tell me so I can fix it" : "Anything you'd like to say? (optional)";
+  $("text").placeholder = low ? "What happened, what feels off, what you expected…" : "What you like, what's missing, what's broken…";
+  $("text").required = low;
+}
+$("text").addEventListener("input", () => $("count").textContent = $("text").value.length + " / 600");
+
+function say(text, ok) { const m = $("msg"); m.textContent = ""; if (text) m.append(el("div", { class: "msg " + (ok ? "okm" : "err"), text })); }
+
+async function loadSummary() {
+  const box = $("summary");
+  const { data, error } = await AT.sb.rpc("review_summary");
+  box.textContent = "";
+  box.append(el("p", { class: "label", text: "Overall" }));
+  if (error) { box.append(el("p", { class: "muted", text: /review_summary/.test(error.message) ? "Reviews open soon." : "Couldn't load reviews right now." })); return; }
+  if (!data.count) { box.append(el("p", { class: "muted", text: "No reviews yet. Be the first!" })); return; }
+  const most = Math.max(...data.spread, 1);
+  box.append(el("div", { class: "row", style: "align-items:baseline;gap:10px" }, [
+    el("span", { class: "rv-avg", style: "color:" + ratingColor(Math.round(data.average)), text: Number(data.average).toFixed(1) }),
+    el("span", { class: "muted", text: "/ 10 from " + data.count + (data.count === 1 ? " review" : " reviews") })]));
+  const bars = el("div", { class: "rv-bars" });
+  for (let i = 10; i >= 1; i--) {
+    const n = data.spread[i - 1];
+    bars.append(el("span", { class: "muted", text: String(i) }),
+      el("div", { class: "rv-bar" }, [el("i", { style: "width:" + (n / most * 100) + "%;background:" + ratingColor(i) })]),
+      el("span", { class: "muted", text: String(n) }));
+  }
+  box.append(bars);
+}
+
+async function loadMine() {
+  const { data } = await AT.sb.rpc("my_review", { p_device: device });
+  const r = data && data[0];
+  if (!r) return;
+  rating = r.rating; $("text").value = r.text; $("name").value = r.name || $("name").value;
+  $("count").textContent = r.text.length + " / 600";
+  $("form-title").textContent = "Your review · " + fmtDate(r.updated_at);
+  $("send").textContent = "Update review";
+  drawScale(); updateText();
+}
+
+$("form").addEventListener("submit", async e => {
+  e.preventDefault();
+  if (!AT.sb) return say("Reviews aren't available right now.");
+  if (!rating) return say("Pick a rating from 1 to 10.");
+  const text = $("text").value.trim();
+  if (rating <= 4 && text.length < 5) return say("Tell me what's wrong so I can fix it.");
+  $("send").disabled = true; say("");
+  const { error } = await AT.sb.rpc("submit_review", { p_device: device, p_name: $("name").value.trim(), p_rating: rating, p_text: text, p_platform: platform });
+  $("send").disabled = false;
+  if (error) return say(/submit_review/.test(error.message) ? "Reviews open soon. Try again later." : error.message);
+  say(rating <= 4 ? "Thanks. I've been sent your review and will look into it." : "Thanks for the review!", true);
+  $("form-title").textContent = "Your review · just now"; $("send").textContent = "Update review";
+  loadSummary(); if (!$("owner").hidden) loadOwner();
+});
+
+// ---------- owner: every review, signed in on the leaderboard as the owner ----------
+async function loadOwner() {
+  const show = !!(AT.profile && AT.profile.role === "owner");
+  $("owner").hidden = !show;
+  if (!show) return;
+  const { data } = await AT.sb.from("reviews").select("id,name,rating,text,platform,updated_at").order("updated_at", { ascending: false }).limit(500);
+  ownerRows = data || [];
+  drawOwner();
+}
+function drawOwner() {
+  document.querySelectorAll("#owner-filter button").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.f === ownerFilter)));
+  const box = $("owner-list"); box.textContent = "";
+  const rows = ownerRows.filter(r => ownerFilter === "all" || r.rating <= 4);
+  if (!rows.length) { box.append(el("p", { class: "muted", text: ownerFilter === "low" ? "No reviews of 4 or below. Nice." : "No reviews yet." })); return; }
+  for (const r of rows)
+    box.append(el("div", { class: "rv-item" + (r.rating <= 4 ? " low" : "") }, [
+      el("span", { class: "rv-score", style: "--rc:" + ratingColor(r.rating), text: r.rating + "/10" }),
+      el("div", { class: "stack", style: "gap:4px" }, [
+        el("div", { text: r.text || "(no comment)", class: r.text ? "" : "muted" }),
+        el("div", { class: "muted", style: "font-size:13px", text: (r.name || "Anonymous") + " · " + (r.platform || "?") + " · " + new Date(r.updated_at).toLocaleString() })])]));
+}
+document.querySelectorAll("#owner-filter button").forEach(b => b.onclick = () => { ownerFilter = b.dataset.f; drawOwner(); });
+
+drawScale(); updateText();
+(async () => {
+  await initAuth();
+  if (!AT.sb) { $("summary-empty").textContent = "Reviews aren't available right now."; return; }
+  loadSummary(); loadMine(); loadOwner();
+  AT.listeners.push(loadOwner);
+})();
+</script>
+</body>
+</html>
