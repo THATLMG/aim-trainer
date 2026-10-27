@@ -17,7 +17,7 @@ create policy "anyone can read notices" on public.notices for select using (true
 -- Hashes of keys that may send notices. No policies: nobody can read or change this from outside.
 create table if not exists public.owner_keys (key_hash text primary key);
 alter table public.owner_keys enable row level security;
-insert into public.owner_keys (key_hash) values ('dc37e4356de228d9c9f9ab885c1c0bb7892711473a2c863f96c810ef7e58a83e')
+insert into public.owner_keys (key_hash) values ('08e3c16dae24a0152696c9deca0c5e79043bdde530d7a9ba8f0a48ad6d9cd780')
 on conflict do nothing;
 
 create or replace function public.send_notice(p_key text, p_text text, p_important boolean default false)
