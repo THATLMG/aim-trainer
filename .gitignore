@@ -10,6 +10,7 @@
 !docs/**
 !supabase/
 !supabase/*.sql
+!supabase/*.md
 !supabase/functions/
 !supabase/functions/**
 !discord/

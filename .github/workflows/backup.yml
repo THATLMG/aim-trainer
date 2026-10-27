@@ -1,0 +1,63 @@
+# Backs up the Supabase database every 2 days (and whenever you run it by hand from the Actions tab).
+# The repo is public, so each backup is encrypted with BACKUP_PASSPHRASE before it's stored; without the passphrase
+# the file is useless. Backups are kept for 90 days. See supabase/BACKUPS.md for setup and how to restore.
+#
+# Repo secrets (Settings > Secrets and variables > Actions):
+#   SUPABASE_DB_URL     the database connection string (Supabase > Connect > Session pooler), with your DB password in it
+#   BACKUP_PASSPHRASE   any long password you make up and keep somewhere safe
+name: Database backup
+
+on:
+  schedule:
+    - cron: "17 7 */2 * *"   # 07:17 UTC every other day
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check secrets
+        env:
+          DB: ${{ secrets.SUPABASE_DB_URL }}
+          PASS: ${{ secrets.BACKUP_PASSPHRASE }}
+        run: |
+          if [ -z "$DB" ] || [ -z "$PASS" ]; then
+            echo "::error::Add the SUPABASE_DB_URL and BACKUP_PASSPHRASE repo secrets first (see supabase/BACKUPS.md)."
+            exit 1
+          fi
+
+      - uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      - name: Dump the database
+        env:
+          DB: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          mkdir backup
+          supabase db dump --db-url "$DB" -f backup/roles.sql --role-only
+          supabase db dump --db-url "$DB" -f backup/schema.sql
+          supabase db dump --db-url "$DB" -f backup/data.sql --use-copy --data-only
+          ls -l backup
+
+      - name: Encrypt
+        id: pack
+        env:
+          PASS: ${{ secrets.BACKUP_PASSPHRASE }}
+        run: |
+          name="aim-trainer-db-$(date -u +%Y-%m-%d)"
+          tar -czf "$name.tar.gz" -C backup .
+          gpg --batch --yes --pinentry-mode loopback --passphrase "$PASS" --symmetric --cipher-algo AES256 -o "$name.tar.gz.gpg" "$name.tar.gz"
+          rm -rf backup "$name.tar.gz"
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.pack.outputs.name }}
+          path: ${{ steps.pack.outputs.name }}.tar.gz.gpg
+          retention-days: 90
+          if-no-files-found: error
